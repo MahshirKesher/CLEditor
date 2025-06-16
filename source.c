@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 //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
 
@@ -27,6 +28,8 @@
 
 enum editorKey
 {
+
+    BACKSPACE = 127,
     _LEFT = 1000,
     _RIGHT,
     _UP,
@@ -71,7 +74,7 @@ struct editorConfig
 
 struct editorConfig EConf;
 
-// terminal
+// terminal.
 
 void die(const char* s)
 {
@@ -277,31 +280,29 @@ void editorAppendRow(char* s, size_t len)
     EConf.numrows++;
 }
 
-// file i/o
-
-void editorOpen(char* filename)
+void editorRowInsertChar(struct erow* row, int at, int c)
 {
-    free(EConf.filename);
-    EConf.filename = strdup(filename);
+    if(at < 0 || at > row->size) at = row->size;
 
-    FILE* fp = fopen(filename, "r");
-    if (!fp) die("fopen");
+    row->chars = realloc(row->chars, row->size + 2);
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
 
-    char* line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
+    row->size++;
+    row->chars[at] = c;
 
-    while ((linelen = getline(&line, &linecap, fp)) != -1)
-    {
-        while (linelen > 0 && (line[linelen - 1] == '\n' ||
-			       line[linelen - 1] == '\r')) 
-	    linelen--;
-        editorAppendRow(line, linelen);
-    }
-    free(line);
-    fclose(fp);
+    editorUpdateRow(row);
 }
- 
+
+// editor operations
+
+void editorInsertChar(int c)
+{
+    if(EConf.cursory == EConf.numrows) { editorAppendRow("", 0); }
+
+    editorRowInsertChar(&EConf.row[EConf.cursory], EConf.cursorx, c);
+    EConf.cursorx++;
+}
+
 // appending buffer
  
 struct abuf
@@ -421,7 +422,7 @@ void editorDrawStatusBar(struct abuf* ab)
     {
         if(EConf.screencols - len == right_len)
 	{
-            abrppend(ab, right_status, right_len);
+            abAppend(ab, right_status, right_len);
 	    break;
 	}
         else
@@ -476,6 +477,80 @@ void editorSetStatusMessage(const char* format_str, ...)
     vsnprintf(EConf.statusmsg, sizeof(EConf.statusmsg), format_str, arg_ptr);
     va_end(arg_ptr);
     EConf.statusmsg_time = time(NULL);
+}
+
+// file i/o
+
+void editorOpen(char* filename)
+{
+    free(EConf.filename);
+    EConf.filename = strdup(filename);
+
+    FILE* fp = fopen(filename, "r");
+    if (!fp) die("fopen");
+
+    char* line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+
+    while ((linelen = getline(&line, &linecap, fp)) != -1)
+    {
+        while (linelen > 0 && (line[linelen - 1] == '\n' ||
+			       line[linelen - 1] == '\r')) 
+	    linelen--;
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
+}
+
+char* editorRowsToString(int* buff_len)
+{
+    int total_len = 0;
+    int j;
+    
+    for(j = 0; j < EConf.numrows; j++)
+        total_len += EConf.row[j].size + 1;
+    *buff_len = total_len;
+
+    char* buffer = malloc(total_len);
+    char* p = buffer;
+    
+    for(j = 0; j < EConf.numrows; j++)
+    {
+        memcpy(p, EConf.row[j].chars, EConf.row[j].size);
+        p += EConf.row[j].size;
+	*p = '\n';
+	p++;
+    }
+
+    return buffer;
+}
+
+void editorSave()
+{
+    if(EConf.filename == NULL) return;
+
+    int len;
+    char* buffer = editorRowsToString(&len);
+
+    int fd = open(EConf.filename, O_RDWR | O_CREAT, 0644);
+    if(fd != -1)
+    {
+        if(ftruncate(fd, len) != -1)
+        {
+	    if(write(fd, buffer, len) == len)
+            {
+	        close(fd);
+		free(buffer);
+	        editorSetStatusMessage("Saved successfully. %d bytes total.", len);
+	    	return;
+	    }
+	}
+        close(fd);
+    }
+    free(buffer);
+    editorSetStatusMessage("Saving error: %s", strerror(errno));
 }
 
 // input
@@ -539,12 +614,20 @@ void editorProcessKeypress()
 
     switch(c)
     {
+        case '\r':
+            // WIP
+	    break;
+	   
         case CTRL_P('q'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
 	    write(STDOUT_FILENO, "\x1b[H", 3);
 	    exit(0);
 	    break;
-        
+
+        case CTRL_P('s'):
+	    editorSave();
+            break;
+
 	case HOME_KEY:
 	    EConf.cursorx = 0;
 	    break;
@@ -553,6 +636,12 @@ void editorProcessKeypress()
             if(EConf.cursory < EConf.numrows)
                 EConf.cursorx = EConf.row[EConf.cursory].size;
             break;
+
+        case BACKSPACE:
+	case CTRL_P('h'):
+	case DEL_KEY:
+	    //WIP
+	    break;
 
         case _UP:
 	case _DOWN:
@@ -575,7 +664,15 @@ void editorProcessKeypress()
 	    int times = EConf.screenrows;
 	    while(times--) 
                 editorMoveCursor(c == PAGE_UP? _UP : _DOWN);
-            break;           
+            break;  
+
+        case CTRL_P('l'):
+	case '\x1b':
+	    break;
+
+        default:
+            editorInsertChar(c);
+            break;	    
     }
 }
 
@@ -610,7 +707,7 @@ int main(int argc, char* argv[])
         editorOpen(argv[1]);
     }
 
-    editorSetStatusMessage("HELP: Ctrl-Q = quit");
+    editorSetStatusMessage("HELP: Ctrl-|Q|= quit |S|= save");
 
     while (1)
     {

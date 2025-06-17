@@ -25,6 +25,7 @@
 
 #define CLE_VER "0.0.1"
 #define CLE_TAB_STOP 4
+#define CLE_QUIT_TIMES 1
 
 enum editorKey
 {
@@ -66,6 +67,7 @@ struct editorConfig
 
     char statusmsg[80];
     time_t statusmsg_time;
+    int dirty;
 
     struct erow* row;
 
@@ -73,6 +75,10 @@ struct editorConfig
 };
 
 struct editorConfig EConf;
+
+// prototypes
+
+void editorSetStatusMessage(const char* fmt, ...);
 
 // terminal.
 
@@ -278,6 +284,7 @@ void editorAppendRow(char* s, size_t len)
     editorUpdateRow(&EConf.row[edge]);
 
     EConf.numrows++;
+    EConf.dirty++;
 }
 
 void editorRowInsertChar(struct erow* row, int at, int c)
@@ -291,6 +298,16 @@ void editorRowInsertChar(struct erow* row, int at, int c)
     row->chars[at] = c;
 
     editorUpdateRow(row);
+    EConf.dirty++;
+}
+
+void editorRowDelChar(struct erow* row, int at)
+{
+    if(at < 0 || at > row->size) return;
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+    row->size--;
+    editorUpdateRow(row);
+    EConf.dirty++;
 }
 
 // editor operations
@@ -302,6 +319,96 @@ void editorInsertChar(int c)
     editorRowInsertChar(&EConf.row[EConf.cursory], EConf.cursorx, c);
     EConf.cursorx++;
 }
+
+void editorDelChar()
+{
+    if(EConf.cursory == EConf.numrows) return;
+    
+    struct erow* row = &EConf.row[EConf.cursory];
+    if(EConf.cursorx > 0)
+    {
+        editorRowDelChar(row, EConf.cursorx - 1);
+	EConf.cursorx--;
+    }
+}
+
+// file i/o
+
+void editorOpen(char* filename)
+{
+    free(EConf.filename);
+    EConf.filename = strdup(filename);
+
+    FILE* fp = fopen(filename, "r");
+    if (!fp) die("fopen");
+
+    char* line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+
+    while ((linelen = getline(&line, &linecap, fp)) != -1)
+    {
+        while (linelen > 0 && (line[linelen - 1] == '\n' ||
+			       line[linelen - 1] == '\r')) 
+	    linelen--;
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
+    
+    EConf.dirty = 0;
+}
+
+char* editorRowsToString(int* buff_len)
+{
+    int total_len = 0;
+    int j;
+    
+    for(j = 0; j < EConf.numrows; j++)
+        total_len += EConf.row[j].size + 1;
+    *buff_len = total_len;
+
+    char* buffer = malloc(total_len);
+    char* p = buffer;
+    
+    for(j = 0; j < EConf.numrows; j++)
+    {
+        memcpy(p, EConf.row[j].chars, EConf.row[j].size);
+        p += EConf.row[j].size;
+	*p = '\n';
+	p++;
+    }
+
+    return buffer;
+}
+
+void editorSave()
+{
+    if(EConf.filename == NULL) return;
+
+    int len;
+    char* buffer = editorRowsToString(&len);
+
+    int fd = open(EConf.filename, O_RDWR | O_CREAT, 0644);
+    if(fd != -1)
+    {
+        if(ftruncate(fd, len) != -1)
+        {
+	    if(write(fd, buffer, len) == len)
+            {
+	        close(fd);
+		free(buffer);
+		EConf.dirty = 0;
+	        editorSetStatusMessage("Saved. %dB total.", len);
+	    	return;
+	    }
+	}
+        close(fd);
+    }
+    free(buffer);
+    editorSetStatusMessage("Saving error: %s", strerror(errno));
+}
+
 
 // appending buffer
  
@@ -408,9 +515,10 @@ void editorDrawStatusBar(struct abuf* ab)
 
     char status[80], right_status[80];
     
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines",
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
 		       EConf.filename? EConf.filename : "[No Name]",
-		       EConf.numrows);
+		       EConf.numrows,
+		       EConf.dirty? "[MODIFIED]" : "");
     
     int right_len = snprintf(right_status, sizeof(right_status), "%d/%d",
 		             EConf.cursory + 1, EConf.numrows);
@@ -479,79 +587,6 @@ void editorSetStatusMessage(const char* format_str, ...)
     EConf.statusmsg_time = time(NULL);
 }
 
-// file i/o
-
-void editorOpen(char* filename)
-{
-    free(EConf.filename);
-    EConf.filename = strdup(filename);
-
-    FILE* fp = fopen(filename, "r");
-    if (!fp) die("fopen");
-
-    char* line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
-
-    while ((linelen = getline(&line, &linecap, fp)) != -1)
-    {
-        while (linelen > 0 && (line[linelen - 1] == '\n' ||
-			       line[linelen - 1] == '\r')) 
-	    linelen--;
-        editorAppendRow(line, linelen);
-    }
-    free(line);
-    fclose(fp);
-}
-
-char* editorRowsToString(int* buff_len)
-{
-    int total_len = 0;
-    int j;
-    
-    for(j = 0; j < EConf.numrows; j++)
-        total_len += EConf.row[j].size + 1;
-    *buff_len = total_len;
-
-    char* buffer = malloc(total_len);
-    char* p = buffer;
-    
-    for(j = 0; j < EConf.numrows; j++)
-    {
-        memcpy(p, EConf.row[j].chars, EConf.row[j].size);
-        p += EConf.row[j].size;
-	*p = '\n';
-	p++;
-    }
-
-    return buffer;
-}
-
-void editorSave()
-{
-    if(EConf.filename == NULL) return;
-
-    int len;
-    char* buffer = editorRowsToString(&len);
-
-    int fd = open(EConf.filename, O_RDWR | O_CREAT, 0644);
-    if(fd != -1)
-    {
-        if(ftruncate(fd, len) != -1)
-        {
-	    if(write(fd, buffer, len) == len)
-            {
-	        close(fd);
-		free(buffer);
-	        editorSetStatusMessage("Saved successfully. %d bytes total.", len);
-	    	return;
-	    }
-	}
-        close(fd);
-    }
-    free(buffer);
-    editorSetStatusMessage("Saving error: %s", strerror(errno));
-}
 
 // input
 
@@ -610,6 +645,8 @@ void editorMoveCursor(int key)
 
 void editorProcessKeypress()
 {
+    static int quit_times = CLE_QUIT_TIMES;
+
     int c = editorReadKey();
 
     switch(c)
@@ -619,6 +656,12 @@ void editorProcessKeypress()
 	    break;
 	   
         case CTRL_P('q'):
+	    if(EConf.dirty && quit_times > 0)
+	    {
+                editorSetStatusMessage("Unsaved changes. CTRL-Q %d more time(s) to quit.", quit_times);
+		quit_times--;
+		return;
+	    }
             write(STDOUT_FILENO, "\x1b[2J", 4);
 	    write(STDOUT_FILENO, "\x1b[H", 3);
 	    exit(0);
@@ -640,7 +683,8 @@ void editorProcessKeypress()
         case BACKSPACE:
 	case CTRL_P('h'):
 	case DEL_KEY:
-	    //WIP
+	    if(c == DEL_KEY) editorMoveCursor(_RIGHT);
+	    editorDelChar();
 	    break;
 
         case _UP:
@@ -674,6 +718,8 @@ void editorProcessKeypress()
             editorInsertChar(c);
             break;	    
     }
+
+    quit_times = CLE_QUIT_TIMES;
 }
 
 // initialization
@@ -693,6 +739,7 @@ void initEditor()
 
     EConf.statusmsg[0] = '\0';
     EConf.statusmsg_time = 0;
+    EConf.dirty = 0;
 
     if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) die("GWINSZ!!!");
     EConf.screenrows -= 2;

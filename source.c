@@ -266,24 +266,43 @@ void editorUpdateRow(struct erow* row)
     row->r_size = idx;
 }
 
-void editorAppendRow(char* s, size_t len)
+void editorInsertRow(int at, char* s, size_t len)
 {
-    EConf.row = realloc(EConf.row, sizeof(struct erow) * (EConf.numrows + 1));
+    if(at < 0 || at > EConf.numrows) return;
 
-    int edge = EConf.numrows;
+    EConf.row = realloc(EConf.row, 
+		        sizeof(struct erow) * (EConf.numrows + 1));
     
-    EConf.row[edge].size = len;
-    EConf.row[edge].chars = malloc(len + 1);
+    EConf.row[at].size = len;
+    EConf.row[at].chars = malloc(len + 1);
     
-    memcpy(EConf.row[edge].chars, s, len);
+    memcpy(EConf.row[at].chars, s, len);
     
-    EConf.row[edge].chars[len] = '\0';
+    EConf.row[at].chars[len] = '\0';
     
-    EConf.row[edge].render = NULL;
-    EConf.row[edge].r_size = 0;
-    editorUpdateRow(&EConf.row[edge]);
+    EConf.row[at].render = NULL;
+    EConf.row[at].r_size = 0;
+    editorUpdateRow(&EConf.row[at]);
 
     EConf.numrows++;
+    EConf.dirty++;
+}
+
+void editorFreeRow(struct erow* row)
+{
+    free(row->render);
+    free(row->chars);
+}
+
+void editorDelRow(int at)
+{
+    if(at < 0 || at >= EConf.numrows) return;
+    
+    editorFreeRow(&EConf.row[at]);
+    memmove(&EConf.row[at], &EConf.row[at + 1], 
+            sizeof(struct erow) * (EConf.numrows - at - 1));
+
+    EConf.numrows--;
     EConf.dirty++;
 }
 
@@ -301,6 +320,19 @@ void editorRowInsertChar(struct erow* row, int at, int c)
     EConf.dirty++;
 }
 
+void editorRowAppendString(struct erow* row, char* s, size_t len)
+{
+    row->chars = realloc(row->chars, row->size + len + 1);
+    memcpy(&row->chars[row->size], s, len);
+
+    row->size += len;
+    row->chars[row->size] = '\0';
+    
+    editorUpdateRow(row);
+    
+    EConf.dirty++;
+}
+
 void editorRowDelChar(struct erow* row, int at)
 {
     if(at < 0 || at > row->size) return;
@@ -314,10 +346,31 @@ void editorRowDelChar(struct erow* row, int at)
 
 void editorInsertChar(int c)
 {
-    if(EConf.cursory == EConf.numrows) { editorAppendRow("", 0); }
+    if(EConf.cursory == EConf.numrows) 
+    {
+        editorInsertRow(EConf.numrows, "", 0);
+    }
 
     editorRowInsertChar(&EConf.row[EConf.cursory], EConf.cursorx, c);
     EConf.cursorx++;
+}
+
+void editorInsertNewline()
+{
+    if(EConf.cursorx == 0) { editorInsertRow(EConf.cursory, "", 0); }
+    else
+    {
+        struct erow* row = &EConf.row[EConf.cursory];
+	editorInsertRow(EConf.cursory + 1, 
+			&row->chars[EConf.cursorx], 
+			row->size - EConf.cursorx);
+	row = &EConf.row[EConf.cursory];
+	row->size = EConf.cursorx;
+	row->chars[row->size] = '\0';
+	editorUpdateRow(row);
+    }
+    EConf.cursory++;
+    EConf.cursorx = 0;
 }
 
 void editorDelChar()
@@ -329,6 +382,13 @@ void editorDelChar()
     {
         editorRowDelChar(row, EConf.cursorx - 1);
 	EConf.cursorx--;
+    } 
+    else
+    {
+        EConf.cursorx = EConf.row[EConf.cursory - 1].size;
+	editorRowAppendString(&EConf.row[EConf.cursory - 1], row->chars, row->size);
+	editorDelRow(EConf.cursory);
+	EConf.cursory--;
     }
 }
 
@@ -351,7 +411,7 @@ void editorOpen(char* filename)
         while (linelen > 0 && (line[linelen - 1] == '\n' ||
 			       line[linelen - 1] == '\r')) 
 	    linelen--;
-        editorAppendRow(line, linelen);
+        editorInsertRow(EConf.numrows, line, linelen);
     }
     free(line);
     fclose(fp);
@@ -652,7 +712,7 @@ void editorProcessKeypress()
     switch(c)
     {
         case '\r':
-            // WIP
+            editorInsertNewline();
 	    break;
 	   
         case CTRL_P('q'):

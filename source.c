@@ -238,6 +238,24 @@ int editorCursor_to_Render(struct erow* row, int cx)
     return renderx;
 }
 
+
+int editorRender_to_Cursor(struct erow* row, int render_x)
+{
+    int cur_rx = 0;
+    int cx;
+
+    for(cx = 0; cx < row->size; cx++)
+    {
+        if(row->chars[cx] == '\t')
+            cur_rx += (CLE_TAB_STOP - 1) - (cur_rx % CLE_TAB_STOP);
+	cur_rx++;
+
+	if(cur_rx > render_x) return cx;
+    }
+
+    return cx;
+}
+
 void editorUpdateRow(struct erow* row)
 {
     int tabs = 0;
@@ -483,6 +501,29 @@ void editorSave()
     editorSetStatusMessage("Saving error: %s", strerror(errno));
 }
 
+// search
+
+void editorSearch()
+{
+    char* query = editorPrompt("Search: %s [ESC to cancel]");
+    if(query == NULL) return;
+
+    int i;
+    for(i = 0; i < EConf.numrows; i++)
+    {
+        struct erow* row = &EConf.row[i];
+        char* match = strstr(row->render, query);
+        if(match)
+        {
+            EConf.cursory = i;
+            EConf.cursorx = editorRender_to_Cursor(row, match - row->render);
+            EConf.row_offset = EConf.numrows;
+            break;
+        }
+    }
+
+    free(query);
+}
 
 // appending buffer
  
@@ -787,6 +828,10 @@ void editorProcessKeypress()
 	    editorSave();
             break;
 
+        case CTRL_P('f'):
+	    editorSearch();
+	    break;
+
 	case HOME_KEY:
 	    EConf.cursorx = 0;
 	    break;
@@ -870,7 +915,7 @@ int main(int argc, char* argv[])
         editorOpen(argv[1]);
     }
 
-    editorSetStatusMessage("HELP: Ctrl-|Q|= quit |S|= save");
+    editorSetStatusMessage("HELP: Ctrl-|Q| = quit |S| = save |F| = find");
 
     while (1)
     {

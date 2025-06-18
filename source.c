@@ -79,6 +79,8 @@ struct editorConfig EConf;
 // prototypes
 
 void editorSetStatusMessage(const char* fmt, ...);
+void editorRefreshScreen();
+char* editorPrompt(char* prompt);
 
 // terminal.
 
@@ -270,18 +272,19 @@ void editorInsertRow(int at, char* s, size_t len)
 {
     if(at < 0 || at > EConf.numrows) return;
 
-    EConf.row = realloc(EConf.row, 
-		        sizeof(struct erow) * (EConf.numrows + 1));
-    
+    EConf.row = realloc(EConf.row, sizeof(struct erow) * (EConf.numrows + 1));
+    memmove(&EConf.row[at + 1], &EConf.row[at], sizeof(struct erow) * (EConf.numrows - at));
+
     EConf.row[at].size = len;
     EConf.row[at].chars = malloc(len + 1);
     
     memcpy(EConf.row[at].chars, s, len);
     
     EConf.row[at].chars[len] = '\0';
-    
-    EConf.row[at].render = NULL;
+
     EConf.row[at].r_size = 0;
+    EConf.row[at].render = NULL;
+
     editorUpdateRow(&EConf.row[at]);
 
     EConf.numrows++;
@@ -357,7 +360,10 @@ void editorInsertChar(int c)
 
 void editorInsertNewline()
 {
-    if(EConf.cursorx == 0) { editorInsertRow(EConf.cursory, "", 0); }
+    if(EConf.cursorx == 0) 
+    {
+        editorInsertRow(EConf.cursory, "", 0); 
+    }
     else
     {
         struct erow* row = &EConf.row[EConf.cursory];
@@ -444,7 +450,15 @@ char* editorRowsToString(int* buff_len)
 
 void editorSave()
 {
-    if(EConf.filename == NULL) return;
+    if(EConf.filename == NULL)
+    {
+        EConf.filename = editorPrompt("Save as: %s [ESC to cancel]");
+        if(EConf.filename == NULL)
+        {
+	    editorSetStatusMessage("Save aborted");
+	    return;
+	}
+    }
 
     int len;
     char* buffer = editorRowsToString(&len);
@@ -649,6 +663,48 @@ void editorSetStatusMessage(const char* format_str, ...)
 
 
 // input
+
+char* editorPrompt(char* prompt)
+{
+    size_t buff_size = 128;
+    char* buff = malloc(buff_size);
+
+    size_t buff_len = 0;
+    buff[0] = '\0';
+
+    while(1)
+    {
+        editorSetStatusMessage(prompt, buff);
+	editorRefreshScreen();
+
+	int c = editorReadKey();
+	if(c == DEL_KEY || c == CTRL_P('h') || c == BACKSPACE)
+	{
+	    if(buff_len != 0) buff[buff_len--] = '\0';
+	}
+	else if(c == '\x1b')
+	{
+	    editorSetStatusMessage("");
+	    free(buff);
+	    return NULL;
+	}
+	else if(c == '\r' && buff_len != 0)
+	{
+	    editorSetStatusMessage("");
+	    return buff;
+	}
+        else if(!iscntrl(c) && c < 128)
+        {
+            if(buff_len == buff_size - 1)
+            {
+	        buff_size *= 2;
+	        buff = realloc(buff, buff_size);
+	    }
+            buff[buff_len++] = c;
+            buff[buff_len] = '\0';
+	}
+    }
+}
 
 void editorMoveCursor(int key)
 {

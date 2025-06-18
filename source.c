@@ -80,7 +80,7 @@ struct editorConfig EConf;
 
 void editorSetStatusMessage(const char* fmt, ...);
 void editorRefreshScreen();
-char* editorPrompt(char* prompt);
+char* editorPrompt(char* prompt, void (*callback)(char*, int));
 
 // terminal.
 
@@ -470,7 +470,7 @@ void editorSave()
 {
     if(EConf.filename == NULL)
     {
-        EConf.filename = editorPrompt("Save as: %s [ESC to cancel]");
+        EConf.filename = editorPrompt("Save as: %s [ESC to cancel]", NULL);
         if(EConf.filename == NULL)
         {
 	    editorSetStatusMessage("Save aborted");
@@ -503,26 +503,61 @@ void editorSave()
 
 // search
 
-void editorSearch()
+void editorSearchCallback(char* query, int key)
 {
-    char* query = editorPrompt("Search: %s [ESC to cancel]");
-    if(query == NULL) return;
+    static int last_match = -1;
+    static int direction = 1;
+    
+    if(key == '\r' || key == '\x1b')
+    {
+        last_match = -1;
+        direction = 1;	
+        return;
+    }
+    else if(key == _RIGHT || key == _DOWN)
+    {
+        direction = 1;
+    }
+    else if (key == _LEFT || key == _UP)
+    {
+        direction = -1;
+    }
+    else
+    {
+        last_match = -1;
+	direction = 1;
+    }
 
+    if(last_match == -1) direction = 1;
+    int current = last_match;
     int i;
     for(i = 0; i < EConf.numrows; i++)
     {
-        struct erow* row = &EConf.row[i];
+        current += direction;
+	if(current == -1) current = EConf.numrows - 1;
+	else if(current == EConf.numrows) current = 0;
+
+        struct erow* row = &EConf.row[current];
         char* match = strstr(row->render, query);
         if(match)
         {
-            EConf.cursory = i;
+            last_match = current;
+            EConf.cursory = current;
             EConf.cursorx = editorRender_to_Cursor(row, match - row->render);
             EConf.row_offset = EConf.numrows;
             break;
         }
     }
+}
 
-    free(query);
+void editorSearch()
+{
+    char* query = editorPrompt("Search: %s [ESC to cancel]", editorSearchCallback);
+
+    if(query)
+    {
+        free(query);
+    }
 }
 
 // appending buffer
@@ -705,7 +740,7 @@ void editorSetStatusMessage(const char* format_str, ...)
 
 // input
 
-char* editorPrompt(char* prompt)
+char* editorPrompt(char* prompt, void (*callback)(char*, int))
 {
     size_t buff_size = 128;
     char* buff = malloc(buff_size);
@@ -726,12 +761,14 @@ char* editorPrompt(char* prompt)
 	else if(c == '\x1b')
 	{
 	    editorSetStatusMessage("");
+	    if(callback) callback(buff, c);
 	    free(buff);
 	    return NULL;
 	}
 	else if(c == '\r' && buff_len != 0)
 	{
 	    editorSetStatusMessage("");
+	    if(callback) callback(buff, c);
 	    return buff;
 	}
         else if(!iscntrl(c) && c < 128)
@@ -744,6 +781,8 @@ char* editorPrompt(char* prompt)
             buff[buff_len++] = c;
             buff[buff_len] = '\0';
 	}
+
+	if(callback) callback(buff, c);	
     }
 }
 

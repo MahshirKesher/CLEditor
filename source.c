@@ -45,10 +45,20 @@ enum editorKey
 enum editorHighlight
 {
     HL_NORMAL = 0,
-    HL_NUMBER
+    HL_NUMBER,
+    HL_MATCH
 };
 
+#define HL_HIGHLIGHT_NUMBERS (1<<0)
+
 // data
+
+struct editorSyntax
+{
+    char* filetype;
+    char** filematch;
+    int flags;
+};
 
 struct erow
 {
@@ -77,11 +87,27 @@ struct editorConfig
     int dirty;
 
     struct erow* row;
+    struct editorSyntax* syntax;
 
     struct termios orig_termios;
 };
 
 struct editorConfig EConf;
+
+// filetypes
+
+char* C_HL_exts[] = {".c", ".cpp", ".h", NULL};
+
+struct editorSyntax HLDB[]
+{
+    {
+        "c",
+        C_HL_exts,
+        HL_HIGHLIGHT_NUMBERS
+    },
+};
+
+#define HLDB_ENTRIES (sizeof(HLDB)/sizeof(HLDB[0]))
 
 // prototypes
 
@@ -232,15 +258,39 @@ int GWINSZ(int* rows, int* cols)
 
 // syntax highlight
 
+int is_separator(int c)
+{
+    return isspace(c) || c == '\0' || strchr("\"\'\t\n,.()+-/*=~%<>[]; ", c) != NULL;
+}
+
 void editorUpdateSyntax(struct erow* row)
 {
     row->highlight = realloc(row->highlight, row->r_size);
     memset(row->highlight, HL_NORMAL, row->r_size);
 
-    int i;
-    for(i = 0; i < row->r_size; i++)
+    if(EConf.syntax == NULL) return;
+
+    int prev_sprt = 1;
+
+    int i = 0;
+    while(i < row->size)
     {
-        if(isdigit(row->render[i])) row->highlight[i] = HL_NUMBER;
+        char c = row->render[i];
+        unsigned char prev_hl = (i > 0)? row->highlight[i - 1] : HL_NORMAL;
+
+	if(EConf.syntax->flags & HL_HIGHLIGHT_NUMBERS)
+        {
+            if((isdigit(c) && (prev_sprt || prev_hl == HL_NUMBER)) 
+	                   || (c == '.' && prev_hl == HL_NUMBER))
+	    {
+	        row->highlight[i] = HL_NUMBER;
+	        i++;
+	        prev_sprt = 0;
+	        continue;
+	    }
+        }
+	prev_sprt = is_separator(c);
+	i++;
     }
 }
 
@@ -249,6 +299,7 @@ int editorSyntax_to_Color(int highlight)
     switch(highlight)
     {
         case HL_NUMBER: return 31;
+	case HL_MATCH: return 34;
 	default: return 37;
     }
 }
@@ -541,7 +592,17 @@ void editorSearchCallback(char* query, int key)
 {
     static int last_match = -1;
     static int direction = 1;
-    
+   
+    static int saved_hl_line;
+    static char* saved_hl = NULL;
+
+    if(saved_hl)
+    {
+        memcpy(EConf.row[saved_hl_line].highlight, saved_hl, EConf.row[saved_hl_line].r_size);
+	free(saved_hl);
+	saved_hl = NULL;
+    }
+
     if(key == '\r' || key == '\x1b')
     {
         last_match = -1;
@@ -579,6 +640,11 @@ void editorSearchCallback(char* query, int key)
             EConf.cursory = current;
             EConf.cursorx = editorRender_to_Cursor(row, match - row->render);
             EConf.row_offset = EConf.numrows;
+
+            saved_hl_line = current;
+	    saved_hl = malloc(row->r_size);
+	    memcpy(saved_hl, row->highlight, row->r_size);
+	    memset(&row->highlight[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }
@@ -734,8 +800,9 @@ void editorDrawStatusBar(struct abuf* ab)
 		       EConf.numrows,
 		       EConf.dirty? "[MODIFIED]" : "");
     
-    int right_len = snprintf(right_status, sizeof(right_status), "%d/%d",
-		             EConf.cursory + 1, EConf.numrows);
+    int right_len = snprintf(right_status, sizeof(right_status), "%s | %d/%d",
+		             EConf.syntax? EConf.syntax->filetype : "no ft", 
+			     EConf.cursory + 1, EConf.numrows);
     
     if(len > EConf.screencols) len = EConf.screencols;
     abAppend(ab, status, len);
@@ -1003,6 +1070,9 @@ void initEditor()
 
     EConf.statusmsg[0] = '\0';
     EConf.statusmsg_time = 0;
+
+    EConf.syntax = NULL;
+
     EConf.dirty = 0;
 
     if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) die("GWINSZ!!!");

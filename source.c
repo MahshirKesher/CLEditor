@@ -42,6 +42,12 @@ enum editorKey
     PAGE_DOWN
 };
 
+enum editorHighlight
+{
+    HL_NORMAL = 0,
+    HL_NUMBER
+};
+
 // data
 
 struct erow
@@ -50,6 +56,7 @@ struct erow
     int r_size;
     char* chars;
     char* render;
+    unsigned char* highlight;
 };
 
 struct editorConfig
@@ -200,7 +207,7 @@ int getCursorPosition(int* rows, int* cols)
     buf[i] = '\0';
 
     if(buf[0] != '\x1b' || buf[1] != '[') return -1;
-    if(sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
+   if(sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
 
     return 0;
 }
@@ -220,6 +227,29 @@ int GWINSZ(int* rows, int* cols)
         *cols = winsz.ws_col;
 	*rows = winsz.ws_row;
 	return 0;
+    }
+}
+
+// syntax highlight
+
+void editorUpdateSyntax(struct erow* row)
+{
+    row->highlight = realloc(row->highlight, row->r_size);
+    memset(row->highlight, HL_NORMAL, row->r_size);
+
+    int i;
+    for(i = 0; i < row->r_size; i++)
+    {
+        if(isdigit(row->render[i])) row->highlight[i] = HL_NUMBER;
+    }
+}
+
+int editorSyntax_to_Color(int highlight)
+{
+    switch(highlight)
+    {
+        case HL_NUMBER: return 31;
+	default: return 37;
     }
 }
 
@@ -284,6 +314,8 @@ void editorUpdateRow(struct erow* row)
     }
     row->render[idx] = '\0';
     row->r_size = idx;
+
+    editorUpdateSyntax(row);
 }
 
 void editorInsertRow(int at, char* s, size_t len)
@@ -302,6 +334,7 @@ void editorInsertRow(int at, char* s, size_t len)
 
     EConf.row[at].r_size = 0;
     EConf.row[at].render = NULL;
+    EConf.row[at].highlight = NULL;
 
     editorUpdateRow(&EConf.row[at]);
 
@@ -313,6 +346,7 @@ void editorFreeRow(struct erow* row)
 {
     free(row->render);
     free(row->chars);
+    free(row->highlight);
 }
 
 void editorDelRow(int at)
@@ -651,7 +685,37 @@ void editorDrawRows(struct abuf* ab)
             int len = EConf.row[file_row].r_size - EConf.col_offset;
 	    if (len < 0) len = 0;
 	    if (len > EConf.screencols) len = EConf.screencols;
-	    abAppend(ab, &EConf.row[file_row].render[EConf.col_offset], len);
+	    unsigned char* highlight = &EConf.row[file_row].highlight[EConf.col_offset];
+	    int current_color = -1;
+            char* c = &EConf.row[file_row].render[EConf.col_offset];
+            int j;
+	    for(j = 0; j < len; j++)
+            {
+	        if(highlight[j] == HL_NORMAL)
+		{
+		    if(current_color != -1)
+		    {
+		        abAppend(ab, "\x1b[39m", 5);
+		        current_color = -1;
+		    }
+                    abAppend(ab, &c[j], 1);
+                }
+		else
+	        {
+                    int color = editorSyntax_to_Color(highlight[j]);
+		    if(color != current_color)
+		    {
+		        current_color = color;
+			char buff[16];
+		        int clen = snprintf(buff, 
+					    sizeof(buff), 
+					    "\x1b[%dm", color);
+		        abAppend(ab, buff, clen);
+		    }
+		    abAppend(ab, &c[j], 1);   
+		}
+	    }
+	    abAppend(ab, "\x1b[39m", 5);
 	}
 
 	abAppend(ab, "\x1b[K", 3);

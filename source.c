@@ -45,11 +45,14 @@ enum editorKey
 enum editorHighlight
 {
     HL_NORMAL = 0,
+    HL_COMMENT,
+    HL_STRING,	
     HL_NUMBER,
     HL_MATCH
 };
 
 #define HL_HIGHLIGHT_NUMBERS (1<<0)
+#define HL_HIGHLIGHT_STRINGS (1<<1)
 
 // data
 
@@ -57,6 +60,7 @@ struct editorSyntax
 {
     char* filetype;
     char** filematch;
+    char* singleline_comment_start;
     int flags;
 };
 
@@ -96,14 +100,15 @@ struct editorConfig EConf;
 
 // filetypes
 
-char* C_HL_exts[] = {".c", ".cpp", ".h", NULL};
+char* C_HL_exts[] = { ".c", ".cpp", ".h", NULL };
 
-struct editorSyntax HLDB[]
+struct editorSyntax HLDB[] = 
 {
     {
         "c",
         C_HL_exts,
-        HL_HIGHLIGHT_NUMBERS
+	"//",
+        HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
 };
 
@@ -203,7 +208,7 @@ int editorReadKey()
 	{
 	    switch (seq[1])
 	    {
-	        case 'H': return HOME_KEY;
+		case 'H': return HOME_KEY;
 		case 'F': return END_KEY;
             }
 	}
@@ -270,7 +275,11 @@ void editorUpdateSyntax(struct erow* row)
 
     if(EConf.syntax == NULL) return;
 
+    char* sc_start = EConf.syntax->singleline_comment_start;
+    int sc_start_len = sc_start? strlen(sc_start) : 0;
+
     int prev_sprt = 1;
+    int in_string = 0;
 
     int i = 0;
     while(i < row->size)
@@ -278,7 +287,44 @@ void editorUpdateSyntax(struct erow* row)
         char c = row->render[i];
         unsigned char prev_hl = (i > 0)? row->highlight[i - 1] : HL_NORMAL;
 
-	if(EConf.syntax->flags & HL_HIGHLIGHT_NUMBERS)
+        if(sc_start_len && !in_string)
+	{
+	    if(!strncmp(&row->render[i], sc_start, sc_start_len))
+	    {
+	        memset(&row->highlight[i], HL_COMMENT, row->r_size - i);
+		break;
+	    }
+	}
+
+        if(EConf.syntax->flags & HL_HIGHLIGHT_STRINGS)
+	{
+	    if(in_string)
+	    {
+	        row->highlight[i] = HL_STRING;
+		if(c == '\\' && i + 1 < row->r_size)
+		{
+                    row->highlight[i + 1] = HL_STRING;
+		    i += 2;
+		    continue;
+		}
+		if(c == in_string) in_string = 0;
+		i++;
+		prev_sprt = 1;
+		continue;
+	    }
+	    else
+	    {
+	        if(c == '"' || c == '\'')
+		{
+		    in_string = c;
+		    row->highlight[i] = HL_STRING;
+		    i++;
+		    continue;
+		}
+	    }
+	}
+
+        if(EConf.syntax->flags & HL_HIGHLIGHT_NUMBERS)
         {
             if((isdigit(c) && (prev_sprt || prev_hl == HL_NUMBER)) 
 	                   || (c == '.' && prev_hl == HL_NUMBER))
@@ -289,6 +335,7 @@ void editorUpdateSyntax(struct erow* row)
 	        continue;
 	    }
         }
+	
 	prev_sprt = is_separator(c);
 	i++;
     }
@@ -300,7 +347,41 @@ int editorSyntax_to_Color(int highlight)
     {
         case HL_NUMBER: return 31;
 	case HL_MATCH: return 34;
+	case HL_STRING: return 35;
+	case HL_COMMENT: return 36;
 	default: return 37;
+    }
+}
+
+void editorSelectSyntaxHighlight()
+{
+    EConf.syntax = NULL;
+    if(EConf.filename == NULL) return;
+
+    char* ext = strrchr(EConf.filename, '.');
+
+    for(unsigned int j = 0; j < HLDB_ENTRIES; j++)
+    {
+        struct editorSyntax* s = &HLDB[j];
+	unsigned int i = 0;
+	while(s->filematch[i])
+	{
+	    int is_ext = (s->filematch[i][0] == '.');
+	    if((is_ext && ext && !strcmp(ext, s->filematch[i])) ||
+	       (!is_ext && strstr(EConf.filename, s->filematch[i])))
+            {
+	        EConf.syntax = s;
+	        
+		int filerow;
+		for(filerow = 0; filerow < EConf.numrows; filerow++)
+                {
+		    editorUpdateSyntax(&EConf.row[filerow]);
+                }
+
+		return;
+            }
+	    i++;
+        }
     }
 }
 
@@ -508,6 +589,8 @@ void editorOpen(char* filename)
     free(EConf.filename);
     EConf.filename = strdup(filename);
 
+    editorSelectSyntaxHighlight();
+
     FILE* fp = fopen(filename, "r");
     if (!fp) die("fopen");
 
@@ -561,6 +644,7 @@ void editorSave()
 	    editorSetStatusMessage("Save aborted");
 	    return;
 	}
+	editorSelectSyntaxHighlight();
     }
 
     int len;

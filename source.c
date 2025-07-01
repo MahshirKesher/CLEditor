@@ -46,7 +46,9 @@ enum editorHighlight
 {
     HL_NORMAL = 0,
     HL_COMMENT,
-    HL_STRING,	
+    HL_KEYWORD_OPER,
+    HL_KEYWORD_DATA,
+    HL_STRING,
     HL_NUMBER,
     HL_MATCH
 };
@@ -60,7 +62,11 @@ struct editorSyntax
 {
     char* filetype;
     char** filematch;
+    
+    char** keywords;
+    
     char* singleline_comment_start;
+    
     int flags;
 };
 
@@ -102,11 +108,22 @@ struct editorConfig EConf;
 
 char* C_HL_exts[] = { ".c", ".cpp", ".h", NULL };
 
+char* C_HL_keywords[] =
+{
+    "if", "else", "switch", "case", "for", "while", "do", 
+    "continue", "break", "return", "typedef", "union",
+
+    "int|", "char|", "long|", "short|", "double|", "static|",
+    "float|", "unsigned|", "signed", "void|", "enum|", "class|",
+    "struct|", NULL
+};
+
 struct editorSyntax HLDB[] = 
 {
     {
         "c",
         C_HL_exts,
+	C_HL_keywords,
 	"//",
         HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
@@ -275,6 +292,8 @@ void editorUpdateSyntax(struct erow* row)
 
     if(EConf.syntax == NULL) return;
 
+    char** keywords = EConf.syntax->keywords;
+
     char* sc_start = EConf.syntax->singleline_comment_start;
     int sc_start_len = sc_start? strlen(sc_start) : 0;
 
@@ -336,6 +355,32 @@ void editorUpdateSyntax(struct erow* row)
 	    }
         }
 	
+        if(prev_sprt)
+	{
+	    int j;
+	    for(j = 0; keywords[j]; j++)
+	    {
+	        int key_len = strlen(keywords[j]);
+		int kw_data = keywords[j][key_len - 1] == '|';
+
+		if(kw_data) key_len--;
+                
+		if(!strncmp(&row->render[i], keywords[j], key_len) &&
+		   is_separator(row->render[i + key_len]))
+		{
+		    memset(&row->highlight[i], kw_data? HL_KEYWORD_DATA : HL_KEYWORD_OPER, key_len);
+		    i += key_len;
+                    break;
+		}
+	    }
+
+	    if(keywords[j] != NULL)
+	    {
+	        prev_sprt = 0;
+		continue;
+	    }
+	}
+
 	prev_sprt = is_separator(c);
 	i++;
     }
@@ -346,6 +391,8 @@ int editorSyntax_to_Color(int highlight)
     switch(highlight)
     {
         case HL_NUMBER: return 31;
+	case HL_KEYWORD_DATA: return 32;
+        case HL_KEYWORD_OPER: return 33;
 	case HL_MATCH: return 34;
 	case HL_STRING: return 35;
 	case HL_COMMENT: return 36;
@@ -841,7 +888,20 @@ void editorDrawRows(struct abuf* ab)
             int j;
 	    for(j = 0; j < len; j++)
             {
-	        if(highlight[j] == HL_NORMAL)
+	        if(iscntrl(c[j]))
+		{
+		    char sym = (c[j] <= 26)? '@' + c[j] : '?';
+		    abAppend(ab, "\x1b[7m", 4);
+		    abAppend(ab, &sym, 1);
+		    abAppend(ab, "\x1b[m", 3);
+                    if(current_color != -1)
+		    {
+		        char buf[16];
+			int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+			abAppend(ab, buf, clen);
+		    }
+		}
+		else if(highlight[j] == HL_NORMAL)
 		{
 		    if(current_color != -1)
 		    {

@@ -46,6 +46,7 @@ enum editorHighlight
 {
     HL_NORMAL = 0,
     HL_COMMENT,
+    HL_MLCOMMENT,
     HL_KEYWORD_OPER,
     HL_KEYWORD_DATA,
     HL_STRING,
@@ -66,17 +67,21 @@ struct editorSyntax
     char** keywords;
     
     char* singleline_comment_start;
-    
+    char* multiline_comment_start;
+    char* multiline_comment_end;
+
     int flags;
 };
 
 struct erow
 {
+    int idx;
     int size;
     int r_size;
     char* chars;
     char* render;
     unsigned char* highlight;
+    int hl_open_comment;
 };
 
 struct editorConfig
@@ -115,7 +120,7 @@ char* C_HL_keywords[] =
 
     "int|", "char|", "long|", "short|", "double|", "static|",
     "float|", "unsigned|", "signed", "void|", "enum|", "class|",
-    "struct|", NULL
+    "struct|", "#define|", "#include|", NULL
 };
 
 struct editorSyntax HLDB[] = 
@@ -125,6 +130,8 @@ struct editorSyntax HLDB[] =
         C_HL_exts,
 	C_HL_keywords,
 	"//",
+	"/*",
+	"*/",
         HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
 };
@@ -295,10 +302,16 @@ void editorUpdateSyntax(struct erow* row)
     char** keywords = EConf.syntax->keywords;
 
     char* sc_start = EConf.syntax->singleline_comment_start;
+    char* mc_start = EConf.syntax->multiline_comment_start;
+    char* mc_end = EConf.syntax->multiline_comment_end;
+
     int sc_start_len = sc_start? strlen(sc_start) : 0;
+    int mc_start_len = mc_start? strlen(mc_start) : 0;
+    int mc_end_len = mc_end? strlen(mc_end) : 0;
 
     int prev_sprt = 1;
     int in_string = 0;
+    int in_comment = (row->idx > 0 && EConf.row[row->idx - 1].hl_open_comment);
 
     int i = 0;
     while(i < row->size)
@@ -306,12 +319,40 @@ void editorUpdateSyntax(struct erow* row)
         char c = row->render[i];
         unsigned char prev_hl = (i > 0)? row->highlight[i - 1] : HL_NORMAL;
 
-        if(sc_start_len && !in_string)
+        if(sc_start_len && !in_string && !in_comment)
 	{
 	    if(!strncmp(&row->render[i], sc_start, sc_start_len))
 	    {
 	        memset(&row->highlight[i], HL_COMMENT, row->r_size - i);
 		break;
+	    }
+	}
+
+        if(mc_start_len && mc_end_len && !in_string)
+	{
+	    if(in_comment)
+	    {
+	        row->highlight[i] = HL_MLCOMMENT;
+		if(!strncmp(&row->render[i], mc_end, mc_end_len))
+                {
+		    memset(&row->highlight[i], HL_COMMENT, mc_end_len);
+		    i += mc_end_len;
+		    in_comment = 0;
+		    prev_sprt = 1;
+		    continue;
+		}
+		else
+		{
+		    i++;
+		    continue;
+		}
+	    }
+	    else if(!strncmp(&row->render[i], mc_start, mc_start_len))
+	    {
+	        memset(&row->highlight[i], HL_MLCOMMENT, mc_start_len);
+		i += mc_start_len;
+		in_comment = 1;
+		continue;
 	    }
 	}
 
@@ -333,7 +374,13 @@ void editorUpdateSyntax(struct erow* row)
 	    }
 	    else
 	    {
-	        if(c == '"' || c == '\'')
+	        if(c == '"' 
+		|| c == '\'' 
+		||(c == '<' && !is_separator(row->render[i + 1]) 
+			    && !isdigit(row->render[i + 1])) 
+		||(c == '>' && !is_separator(row->render[i + 1] 
+	                    && (is_separator(row->render[i - 1]) 
+		            && row->render[i - 1] == ' '))))
 		{
 		    in_string = c;
 		    row->highlight[i] = HL_STRING;
@@ -384,6 +431,11 @@ void editorUpdateSyntax(struct erow* row)
 	prev_sprt = is_separator(c);
 	i++;
     }
+
+    int changed = (row->hl_open_comment != in_comment);
+    row->hl_open_comment = in_comment;
+    if(changed && row->idx + 1 < EConf.numrows)
+        editorUpdateSyntax(&EConf.row[row->idx + 1]);
 }
 
 int editorSyntax_to_Color(int highlight)
@@ -395,6 +447,7 @@ int editorSyntax_to_Color(int highlight)
         case HL_KEYWORD_OPER: return 33;
 	case HL_MATCH: return 34;
 	case HL_STRING: return 35;
+	case HL_MLCOMMENT:
 	case HL_COMMENT: return 36;
 	default: return 37;
     }
@@ -503,6 +556,9 @@ void editorInsertRow(int at, char* s, size_t len)
 
     EConf.row = realloc(EConf.row, sizeof(struct erow) * (EConf.numrows + 1));
     memmove(&EConf.row[at + 1], &EConf.row[at], sizeof(struct erow) * (EConf.numrows - at));
+    for(int j = at + 1; j <= EConf.numrows; j++) EConf.row[j].idx++;
+
+    EConf.row[at].idx = at;
 
     EConf.row[at].size = len;
     EConf.row[at].chars = malloc(len + 1);
@@ -514,6 +570,7 @@ void editorInsertRow(int at, char* s, size_t len)
     EConf.row[at].r_size = 0;
     EConf.row[at].render = NULL;
     EConf.row[at].highlight = NULL;
+    EConf.row[at].hl_open_comment = 0;
 
     editorUpdateRow(&EConf.row[at]);
 
@@ -535,6 +592,8 @@ void editorDelRow(int at)
     editorFreeRow(&EConf.row[at]);
     memmove(&EConf.row[at], &EConf.row[at + 1], 
             sizeof(struct erow) * (EConf.numrows - at - 1));
+
+    for(int j = at; j < EConf.numrows - 1; j++) EConf.row[j].idx--;
 
     EConf.numrows--;
     EConf.dirty++;

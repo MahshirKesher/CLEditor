@@ -1140,7 +1140,7 @@ void editorMoveCursor(int key)
 	
 	case _DOWN:
 	    if(EConf.cursory < EConf.numrows) { EConf.cursory++; }
-	    if(EConf.cursorx == row->size)
+	    if(EConf.cursorx == row->size && row->size != 0)
 	    {
                 row = (EConf.cursory <= EConf.numrows)?
                       &EConf.row[EConf.cursory] : NULL;
@@ -1150,7 +1150,7 @@ void editorMoveCursor(int key)
 
 	case _UP:
 	    if(EConf.cursory > 0) { EConf.cursory--; }
-	    if(EConf.cursorx == row->size)
+	    if(EConf.cursorx == row->size && row->size != 0)
 	    {
                 row = (EConf.cursory <= EConf.numrows)?
                       &EConf.row[EConf.cursory] : NULL;

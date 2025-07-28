@@ -98,6 +98,11 @@ struct editorConfig
 
 	struct erow* row;
 
+	char* filename;
+	
+	char status_message[80];		
+	time_t status_message_time;
+
 	struct termios cooked;
 };
 
@@ -204,8 +209,17 @@ void CLE_appendRow(char* s, size_t len)
 
 /* FILE OPERATIONS */
 
+void getFilename(char* filename)
+{
+	free(EConf.filename);
+	EConf.filename = strdup(filename);
+	if(!EConf.filename) return;
+}
+
 void cle_launch(char* filename)
 {
+	getFilename(filename);
+
 	FILE* fp = fopen(filename, "r");
 	if(!fp) died_of("File opening error.");
 	
@@ -217,8 +231,7 @@ void cle_launch(char* filename)
 	{
 		while(linelen > 0 && (line[linelen - 1] == '\n' 
 						      || line[linelen - 1] == '\r'))
-		linelen--;
-	
+		linelen--;	
 		CLE_appendRow(line, linelen);			
 	}
 	free(line);
@@ -417,7 +430,7 @@ void moveUp()
 
 void moveDown()
 {
-	if(EConf.cursory < EConf.numrows)
+	if(EConf.cursory < EConf.numrows - 1)
 	{
 		EConf.cursory++;
 	}
@@ -425,8 +438,11 @@ void moveDown()
 
 void movePage(int movement)
 {
-	for(int i = 0; i <= EConf.screenrows; i++)
-		movement == PAGE_UP? moveUp() : moveDown();
+	int cursor_offset = EConf.cursory - EConf.y_offset;
+	for(int i = 0; i < EConf.screenrows - 1; i++) movement == PAGE_UP? moveUp() : moveDown();
+
+	EConf.y_offset = (EConf.cursory < EConf.numrows - EConf.screenrows)? EConf.cursory - cursor_offset : EConf.numrows - EConf.screenrows;
+	if(EConf.y_offset < 0) EConf.y_offset = 0;
 }
 
 void moveToEdge(int movement, struct erow* curr_row)
@@ -522,11 +538,44 @@ void drawTextRows(struct ubuf* ubuf)
 		}
 
 		updBufQueue(ubuf, "\x1b[K", 3);
-		if(y < EConf.screenrows - 1)
-		{
-			updBufQueue(ubuf, "\r\n", 2);
-		}
+		 updBufQueue(ubuf, "\r\n", 2);
 	}
+}
+
+void drawStatusBar(struct ubuf* ubuf)
+{
+	updBufQueue(ubuf, "\x1b[7m", 4);
+
+	char status[80];
+	int status_len = snprintf(status, sizeof(status), "%.20s - %d lines.", EConf.filename? EConf.filename : "[No name]", EConf.numrows);
+
+	char right_status[80];
+	int right_status_len = snprintf(right_status, sizeof(right_status), "%d/%d", EConf.cursory + 1, EConf.numrows);
+
+	updBufQueue(ubuf, status, status_len);
+	while(status_len < EConf.screencols)
+	{
+		if(EConf.screencols - status_len == right_status_len)
+		{
+			updBufQueue(ubuf, right_status, right_status_len);
+			break;
+		}
+		else
+		{
+			updBufQueue(ubuf, " ", 1);
+			status_len++;
+		}	
+	}
+	updBufQueue(ubuf, "\x1b[m", 3);
+	updBufQueue(ubuf, "\r\n", 2);
+}
+
+void displayStatusMessageBar(struct ubuf* ubuf)
+{
+	updBufQueue(ubuf, "\x1b[K", 3);
+	int message_len = strlen(EConf.status_message);
+	if(message_len > EConf.screencols) message_len = EConf.screencols;
+	if(message_len && time(NULL) - EConf.status_message_time < 5) updBufQueue(ubuf, EConf.status_message, message_len);
 }
 
 void scrollRows()
@@ -578,6 +627,8 @@ void refreshScreen()
 	updBufQueue(&ubuf, "\x1b[H", 3);
 
 	drawTextRows(&ubuf);
+	drawStatusBar(&ubuf);
+	displayStatusMessageBar(&ubuf);
 
 	traceCursor(&ubuf);	
 
@@ -585,6 +636,15 @@ void refreshScreen()
 
 	write(STDOUT_FILENO, ubuf.buf, ubuf.len);
 	updBufFree(&ubuf);
+}
+
+void setStatusMessage(const char* format_str, ...)
+{
+	va_list arg_list;
+	va_start(arg_list, format_str);
+	vsnprintf(EConf.status_message, sizeof(EConf.status_message), format_str, arg_list);
+	va_end(arg_list);
+	EConf.status_message_time = time(NULL);
 }
 
 /* INITIALIZATION */
@@ -599,8 +659,13 @@ void editorInit()
 	EConf.numrows = 0;
 
 	EConf.row = NULL;
+	EConf.filename = NULL;
+
+	EConf.status_message[0] = '\0';
+	EConf.status_message_time = 0;
 
 	if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) died_of("GWINSZ!");
+	EConf.screenrows -= 2; // Getting one spare line for status bar and one more line for status message bar.
 }
 
 int main(int argc, char* argv[])
@@ -612,6 +677,8 @@ int main(int argc, char* argv[])
 	{
 		cle_launch(argv[1]);
 	}
+	
+	setStatusMessage("CTRL+Q to quit.");
 
 	while(1)
 	{

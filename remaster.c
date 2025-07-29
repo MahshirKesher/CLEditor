@@ -233,7 +233,7 @@ void insertChar(int c)
 char* cle_fileToSingleString(int* buffer_len)
 {
 	int file_len = 0;
-	for(int j = 0; j < EConf.numrows; j++) file_len += EConf.row[j].size;
+	for(int j = 0; j < EConf.numrows; j++) file_len += EConf.row[j].size + 1;
 	*buffer_len = file_len;
 
 	char* buffer = malloc(file_len);

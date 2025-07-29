@@ -82,7 +82,7 @@ enum miscMovement
 enum charManipulation
 {
 	_BACKSPACE = 127,
-	_DEL
+	_DELETE
 };
 
 /* TERMINAL SETUP */
@@ -207,9 +207,49 @@ void CLE_appendRow(char* s, size_t len)
 	EConf.numrows++;
 }
 
+void CLE_insertCharToRow(struct erow* row, int at, int c)
+{
+	if(at < 0 || at > row->size) at = row->size;
+	row->text = realloc(row->text, row->size + 2);
+
+	memmove(&row->text[at + 1], &row->text[at], row->size - at + 1);
+	row->size++;
+	row->text[at] = c;
+	CLE_updateRow(row);
+}
+
+/* ENTIRE EDITOR OPERATIONS */
+
+void insertChar(int c)
+{
+	if(EConf.cursory == EConf.numrows) CLE_appendRow("", 0);	
+
+	CLE_insertCharToRow(&EConf.row[EConf.cursory], EConf.cursorx, c);
+	EConf.cursorx++;
+}
+
 /* FILE OPERATIONS */
 
-void getFilename(char* filename)
+char* cle_fileToSingleString(int* buffer_len)
+{
+	int file_len = 0;
+	for(int j = 0; j < EConf.numrows; j++) file_len += EConf.row[j].size;
+	*buffer_len = file_len;
+
+	char* buffer = malloc(file_len);
+	char* ptr = buffer;
+
+	for(int j = 0; j < EConf.numrows; j++)
+	{
+		memcpy(ptr, EConf.row[j].text, EConf.row[j].size);
+		ptr += EConf.row[j].size;
+		*ptr = '\n';
+		ptr++;
+	}
+	return buffer;
+}
+
+void cle_getFilename(char* filename)
 {
 	free(EConf.filename);
 	EConf.filename = strdup(filename);
@@ -218,7 +258,7 @@ void getFilename(char* filename)
 
 void cle_launch(char* filename)
 {
-	getFilename(filename);
+	cle_getFilename(filename);
 
 	FILE* fp = fopen(filename, "r");
 	if(!fp) died_of("File opening error.");
@@ -236,6 +276,20 @@ void cle_launch(char* filename)
 	}
 	free(line);
 	fclose(fp);
+}
+
+void cle_saveFile()
+{
+	if(EConf.filename == NULL) return;
+	
+	int file_len;
+	char* file_buffer = cle_fileToSingleString(&file_len);
+
+	int cle = open(EConf.filename, O_RDWR | O_CREAT, 0644);
+	ftruncate(cle, file_len);
+	write(cle, file_buffer, file_len);
+	close(cle);
+	free(file_buffer);
 }
 
 /* BUFFER FOR WRITE QUEUE */
@@ -307,7 +361,7 @@ int otherMove(int key)
 {
 	switch(key)
 	{
-		case '3': return _DEL;
+		case '3': return _DELETE;
 
 		case 'H':
 		case '1':
@@ -503,6 +557,10 @@ void processKey()
 			clearScreen();
 			exit(0);
 			break;
+
+		case CTRL_P('s'):
+			cle_saveFile();
+			break;
 	
 		case _UP:
 		case _DOWN:
@@ -513,6 +571,23 @@ void processKey()
 		case _HOME:
 		case _END:
 			moveCursor(c);
+			break;
+
+		case '\r':
+		case '\n':
+			//TODO: insertRow();
+			break;
+
+		case _BACKSPACE:
+		case _DELETE:
+			//TODO: deleteChar(&EConf.row[EConf.cursory], EConf.cursorx);
+			break;
+
+		case '\x1b':
+			break;
+
+		default:
+			insertChar(c);
 			break;
 	}
 }

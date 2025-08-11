@@ -34,12 +34,15 @@ int cursorIsAt(int* x, int* y);
 /* Sends the cursor into the bottom-right corner of the screen and then parses its current row and column.
 * 	Current row and column are equal to the size of the screen, so that's how it's set.
 */
+void setStatusMessage(const char* format_str, ...);
+/* Writes format_str as a status message using fctnl.h. Basically just a custom printf() variant.
+*/
 
 /* DEFINITIONS */
-
 #define CTRL_P(c) ((c) & 0x1f)
 #define CLE_VER "0.1.0"
 #define CLE_TAB_SIZE 4
+#define TIMES_TO_QUIT_UNSAVED 1
 
 /* ERROR HANDLING */
 
@@ -82,7 +85,7 @@ enum miscMovement
 enum charManipulation
 {
 	_BACKSPACE = 127,
-	_DELETE
+ 	_DELETE
 };
 
 /* TERMINAL SETUP */
@@ -97,6 +100,8 @@ struct editorConfig
 	int numrows;
 
 	struct erow* row;
+
+	int isModified;
 
 	char* filename;
 	
@@ -171,7 +176,6 @@ void CLE_updateRow(struct erow* row)
 
 	free(row->render_text);
 	row->render_text = malloc(row->size + tab_count * (CLE_TAB_SIZE - 1) + 1);
-
 	int j;
 	int idx = 0;
 	for(j = 0; j < row->size; j++)
@@ -204,7 +208,24 @@ void CLE_appendRow(char* s, size_t len)
 
 	CLE_updateRow(&EConf.row[to_process]);
 
+	EConf.isModified++;
 	EConf.numrows++;
+}
+
+void CLE_freeRow(struct erow* row)
+{
+	free(row->render_text);
+	free(row->text);
+}
+
+void CLE_delRow(int at)
+{
+	if(at < 0 || at >+ EConf.numrows) return;
+
+	CLE_freeRow(&EConf.row[at]);
+	memmove(&EConf.row[at], &EConf.row[at + 1], sizeof(struct erow) * (EConf.numrows - at - 1));
+	EConf.numrows--;
+	EConf.isModified++;
 }
 
 void CLE_insertCharToRow(struct erow* row, int at, int c)
@@ -216,6 +237,17 @@ void CLE_insertCharToRow(struct erow* row, int at, int c)
 	row->size++;
 	row->text[at] = c;
 	CLE_updateRow(row);
+	EConf.isModified++;
+}
+
+void CLE_delCharFromRow(struct erow* row, int at)
+{
+	if(at < 0 || at > row->size) at = row->size;
+	
+	memmove(&row->text[at], &row->text[at + 1], row->size - at);
+	row->size--;
+	CLE_updateRow(row);
+	EConf.isModified++;
 }
 
 /* ENTIRE EDITOR OPERATIONS */
@@ -228,7 +260,41 @@ void insertChar(int c)
 	EConf.cursorx++;
 }
 
+void delChar()
+{
+	if(EConf.cursory == EConf.numrows) return;
+	
+	struct erow* row = &EConf.row[EConf.cursory];
+	if(EConf.cursorx > 0)
+	{
+		CLE_delCharFromRow(row, EConf.cursorx);
+		EConf.cursorx--;
+	}
+}
+
 /* FILE OPERATIONS */
+
+int cle_fileTruncate(int file_len, char* buffer)
+{
+	int cle = open(EConf.filename, O_RDWR | O_CREAT | O_TRUNC, 0644);
+	if(cle == -1)
+	{
+		free(buffer);
+		return 0;
+	}
+	if(write(cle, buffer, file_len) == file_len)
+	{
+		close(cle);
+		free(buffer);
+		setStatusMessage("Success. %dB saved.", file_len);
+		EConf.isModified = 0;
+		return 1;
+	}
+	close(cle);
+	free(buffer);
+	setStatusMessage("Fail. I/O error: %s", strerror(errno));
+	return 0;
+}
 
 char* cle_fileToSingleString(int* buffer_len)
 {
@@ -276,6 +342,7 @@ void cle_launch(char* filename)
 	}
 	free(line);
 	fclose(fp);
+	EConf.isModified = 0;
 }
 
 void cle_saveFile()
@@ -284,12 +351,11 @@ void cle_saveFile()
 	
 	int file_len;
 	char* file_buffer = cle_fileToSingleString(&file_len);
-
-	int cle = open(EConf.filename, O_RDWR | O_CREAT, 0644);
-	ftruncate(cle, file_len);
-	write(cle, file_buffer, file_len);
-	close(cle);
-	free(file_buffer);
+	
+	if(!cle_fileTruncate(file_len, file_buffer))
+	{
+		setStatusMessage("The saving thing has majestically fucked up.");
+	}
 }
 
 /* BUFFER FOR WRITE QUEUE */
@@ -549,11 +615,18 @@ void moveCursor(int movement)
 
 void processKey()
 {
+	static int quit_attempts = TIMES_TO_QUIT_UNSAVED;
 	int c = readKey();
 
 	switch(c)
 	{
 		case CTRL_P('q'):
+			if(EConf.isModified && quit_attempts > 0) 
+			{
+				setStatusMessage("CTRL+Q %d more time(s) to discard unsaved changes.", quit_attempts);
+				quit_attempts--;
+				return;
+			}
 			clearScreen();
 			exit(0);
 			break;
@@ -580,7 +653,8 @@ void processKey()
 
 		case _BACKSPACE:
 		case _DELETE:
-			//TODO: deleteChar(&EConf.row[EConf.cursory], EConf.cursorx);
+			if(c == _DELETE && EConf.cursorx != EConf.row[EConf.cursory].size) moveCursor(_RIGHT);
+			delChar();
 			break;
 
 		case '\x1b':
@@ -622,7 +696,10 @@ void drawStatusBar(struct ubuf* ubuf)
 	updBufQueue(ubuf, "\x1b[7m", 4);
 
 	char status[80];
-	int status_len = snprintf(status, sizeof(status), "%.20s - %d lines.", EConf.filename? EConf.filename : "[No name]", EConf.numrows);
+	int status_len = snprintf(status, sizeof(status), "%.20s - %d lines %s", 
+														EConf.filename? EConf.filename : "[No name]", 
+														EConf.numrows,
+														EConf.isModified? "[MODIFIED]" : "");
 
 	char right_status[80];
 	int right_status_len = snprintf(right_status, sizeof(right_status), "%d/%d", EConf.cursory + 1, EConf.numrows);
@@ -645,7 +722,7 @@ void drawStatusBar(struct ubuf* ubuf)
 	updBufQueue(ubuf, "\r\n", 2);
 }
 
-void displayStatusMessageBar(struct ubuf* ubuf)
+void drawStatusMessageBar(struct ubuf* ubuf)
 {
 	updBufQueue(ubuf, "\x1b[K", 3);
 	int message_len = strlen(EConf.status_message);
@@ -703,7 +780,7 @@ void refreshScreen()
 
 	drawTextRows(&ubuf);
 	drawStatusBar(&ubuf);
-	displayStatusMessageBar(&ubuf);
+	drawStatusMessageBar(&ubuf);
 
 	traceCursor(&ubuf);	
 
@@ -738,6 +815,8 @@ void editorInit()
 
 	EConf.status_message[0] = '\0';
 	EConf.status_message_time = 0;
+	
+	EConf.isModified = 0;
 
 	if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) died_of("GWINSZ!");
 	EConf.screenrows -= 2; // Getting one spare line for status bar and one more line for status message bar.
@@ -753,7 +832,7 @@ int main(int argc, char* argv[])
 		cle_launch(argv[1]);
 	}
 	
-	setStatusMessage("CTRL+Q to quit.");
+	setStatusMessage("CTRL + {Q to quit, S to save}");
 
 	while(1)
 	{

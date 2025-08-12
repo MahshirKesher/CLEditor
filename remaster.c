@@ -19,25 +19,12 @@
 
 /* PREDECLARATIONS AND DOCUMENTATIONS | P&D */
 
+char* setPrompt(char* prompt);
+void refreshScreen();
 void clearScreen();
-/* Clears the screen with 2 terminal instructions:
-*	<esc>[2J - clear the entire screen;
-*	<esc>[H - return the cursor to the upper left corner of the screen;
-*/
-
 int readKey();
-/* Gets an input from keyboard and reads it into STDIN_FILENO for further processing.
-*	Escape sequences are processed based on a 0-character: [ or O. 1-character: letter or digit.
-*/
-
 int cursorIsAt(int* x, int* y);
-/* Sends the cursor into the bottom-right corner of the screen and then parses its current row and column.
-* 	Current row and column are equal to the size of the screen, so that's how it's set.
-*/
 void setStatusMessage(const char* format_str, ...);
-/* Writes format_str as a status message using fctnl.h. Basically just a custom printf() variant. 
-*	Always aimed at the bottom line of the screen created for status messages/hints.
-*/
 
 /* DEFINITIONS */
 #define CTRL_P(c) ((c) & 0x1f)
@@ -74,7 +61,6 @@ enum arrows
 	_LEFT,
 	_RIGHT
 };
-
 enum miscMovement
 {
 	PAGE_UP = 1005,
@@ -360,7 +346,7 @@ char* cle_fileToSingleString(int* buffer_len)
 	return buffer;
 }
 
-void cle_getFilename(char* filename)
+void cle_setFilename(char* filename)
 {
 	free(EConf.filename);
 	EConf.filename = strdup(filename);
@@ -369,7 +355,7 @@ void cle_getFilename(char* filename)
 
 void cle_launch(char* filename)
 {
-	cle_getFilename(filename);
+	cle_setFilename(filename);
 
 	FILE* fp = fopen(filename, "r");
 	if(!fp) died_of("File opening error.");
@@ -392,7 +378,15 @@ void cle_launch(char* filename)
 
 void cle_saveFile()
 {
-	if(EConf.filename == NULL) return;
+	if(EConf.filename == NULL)
+	{
+		EConf.filename = setPrompt("Save as: %s");
+		if(EConf.filename == NULL)
+		{
+			setStatusMessage("Saving aborted.");
+			return;
+		}
+	}
 	
 	int file_len;
 	char* file_buffer = cle_fileToSingleString(&file_len);
@@ -455,6 +449,53 @@ int cursorIsAt(int* rows, int* cols)
 }
 
 /* INPUT PROCESSING */
+void expandBuffer(char* buffer, int buffer_size)
+{
+	buffer_size *= 2;
+	buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
+}
+
+char* setPrompt(char* prompt)
+{
+	size_t buffer_size = 128;
+	char* prompt_buffer = malloc(buffer_size);
+
+	size_t prompt_len = 0;
+	prompt_buffer[0] = '\0';
+	int noPrompt, isValidChar, deleteChar;
+
+	while(1)
+	{
+		setStatusMessage(prompt, prompt_buffer);
+		refreshScreen();
+
+		int c = readKey();
+		deleteChar = (c == _DELETE || c == _BACKSPACE);
+		noPrompt = (c == '\r' && prompt_len == 0);
+		isValidChar = (!iscntrl(c) && c < 128);
+		if(deleteChar)
+		{
+			if(prompt_len != 0) prompt_buffer[--prompt_len] = '\0';
+		}
+		else if(c == '\x1b')
+		{
+			setStatusMessage("");
+			free(prompt_buffer);
+			return NULL;
+		}
+		else if(noPrompt)
+		{
+			setStatusMessage("");
+			return prompt_buffer;
+		} 
+		else if(isValidChar)
+		{
+			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, buffer_size);
+			prompt_buffer[prompt_len++] = c;
+			prompt_buffer[prompt_len] = '\0';
+		}
+	}
+}
 
 int arrowMove(int c)
 {
@@ -693,7 +734,7 @@ void processKey()
 
 		case '\r':
 		case '\n':
-			//TODO: insertRow();
+			insertNewRow();
 			break;
 
 		case _BACKSPACE:

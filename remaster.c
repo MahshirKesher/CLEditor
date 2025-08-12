@@ -35,7 +35,8 @@ int cursorIsAt(int* x, int* y);
 * 	Current row and column are equal to the size of the screen, so that's how it's set.
 */
 void setStatusMessage(const char* format_str, ...);
-/* Writes format_str as a status message using fctnl.h. Basically just a custom printf() variant.
+/* Writes format_str as a status message using fctnl.h. Basically just a custom printf() variant. 
+*	Always aimed at the bottom line of the screen created for status messages/hints.
 */
 
 /* DEFINITIONS */
@@ -191,18 +192,18 @@ void CLE_updateRow(struct erow* row)
     row->render_size = idx;
 }
 
-void CLE_appendRow(char* s, size_t len)
+void CLE_appendRow (int to_process, char* s, size_t len)
 {
-	EConf.row = realloc(EConf.row, sizeof(struct erow) * (EConf.numrows + 1));
-	
-	int to_process = EConf.numrows;	// last line to be processed.
+	if(to_process < 0 || to_process > EConf.numrows) return;
+
+	EConf.row = realloc(EConf.row, sizeof(struct erow) * (EConf.numrows + 1));	
+	memmove(&EConf.row[to_process + 1], &EConf.row[to_process], sizeof(struct erow) * (EConf.numrows - to_process));
 
 	EConf.row[to_process].size = len;
 	EConf.row[to_process].text = malloc(len + 1);
 	
 	memcpy(EConf.row[to_process].text, s, len);
 	EConf.row[to_process].text[len] = '\0';
-
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
 
@@ -240,6 +241,20 @@ void CLE_insertCharToRow(struct erow* row, int at, int c)
 	EConf.isModified++;
 }
 
+void CLE_uniteRows(struct erow* row, char* s, size_t len)
+{
+	row->text = realloc(row->text, row->size + len + 1);
+
+	memcpy(&row->text[row->size], s, len);
+
+	row->size += len;
+	row->text[row->size] = '\0';
+
+	CLE_updateRow(row);
+
+	EConf.isModified++;
+}
+
 void CLE_delCharFromRow(struct erow* row, int at)
 {
 	if(at < 0 || at > row->size) at = row->size;
@@ -254,21 +269,51 @@ void CLE_delCharFromRow(struct erow* row, int at)
 
 void insertChar(int c)
 {
-	if(EConf.cursory == EConf.numrows) CLE_appendRow("", 0);	
+	if(EConf.cursory == EConf.numrows) 
+	{
+		CLE_appendRow(EConf.numrows, "", 0);	
+	}	
 
 	CLE_insertCharToRow(&EConf.row[EConf.cursory], EConf.cursorx, c);
 	EConf.cursorx++;
 }
 
+void insertNewRow()
+{
+	if(EConf.cursorx == 0)
+	{
+		CLE_appendRow(EConf.cursory, "", 0);
+	}
+	else
+	{
+		struct erow* row = &EConf.row[EConf.cursory];
+		CLE_appendRow(EConf.cursory + 1, &row->text[EConf.cursorx], row->size - EConf.cursorx);
+		row = &EConf.row[EConf.cursory];
+		row->size = EConf.cursorx;
+		row->text[row->size] = '\0';
+		CLE_updateRow(row);
+	}
+	EConf.cursory++;
+	EConf.cursorx = 0;
+}
+
 void delChar()
 {
 	if(EConf.cursory == EConf.numrows) return;
+	if(EConf.cursorx == 0 && EConf.cursory == 0) return;
 	
 	struct erow* row = &EConf.row[EConf.cursory];
 	if(EConf.cursorx > 0)
 	{
 		CLE_delCharFromRow(row, EConf.cursorx);
 		EConf.cursorx--;
+	}
+	else
+	{
+		EConf.cursorx = EConf.row[EConf.cursory - 1].size;
+		CLE_uniteRows(&EConf.row[EConf.cursory - 1], row->text, row->size);
+		CLE_delRow(EConf.cursory);
+		EConf.cursory--;
 	}
 }
 
@@ -338,7 +383,7 @@ void cle_launch(char* filename)
 		while(linelen > 0 && (line[linelen - 1] == '\n' 
 						      || line[linelen - 1] == '\r'))
 		linelen--;	
-		CLE_appendRow(line, linelen);			
+		CLE_appendRow(EConf.numrows, line, linelen);			
 	}
 	free(line);
 	fclose(fp);

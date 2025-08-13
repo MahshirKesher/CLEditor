@@ -471,7 +471,7 @@ char* setPrompt(char* prompt)
 
 		int c = readKey();
 		deleteChar = (c == _DELETE || c == _BACKSPACE);
-		noPrompt = (c == '\r' && prompt_len == 0);
+		noPrompt = (prompt_len == 0 && c == '\r');
 		isValidChar = (!iscntrl(c) && c < 128);
 		if(deleteChar)
 		{
@@ -493,6 +493,10 @@ char* setPrompt(char* prompt)
 			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, buffer_size);
 			prompt_buffer[prompt_len++] = c;
 			prompt_buffer[prompt_len] = '\0';
+		}
+		else if(c == '\r')
+		{
+			return prompt_buffer;
 		}
 	}
 }
@@ -606,7 +610,7 @@ void moveLeft(struct erow* prev_row)
 	{
 		EConf.cursorx--;
 	}
-	else if(EConf.cursorx == 0 && prev_row)
+	else if(prev_row && EConf.cursorx == 0)
 	{
 		EConf.cursory--;
 		EConf.cursorx = prev_row->size;
@@ -615,12 +619,12 @@ void moveLeft(struct erow* prev_row)
 
 void moveRight(struct erow* curr_row, struct erow* next_row)
 {
-	if(EConf.cursorx == curr_row->size && next_row)
+	if(curr_row && EConf.cursorx == curr_row->size && next_row)
 	{
 		EConf.cursory++;
 		EConf.cursorx = 0;
 	}
-	else
+	else if(curr_row)
 	{
 		EConf.cursorx++;
 	}
@@ -653,35 +657,32 @@ void movePage(int movement)
 
 void moveToEdge(int movement, struct erow* curr_row)
 {
-	EConf.cursorx = (movement == _HOME)? 0 : curr_row->size;
+	if(curr_row) EConf.cursorx = (movement == _HOME)? 0 : curr_row->size;
 }
 
 void moveCursor(int movement)
 {
 	static int saved_x = 0;
-
 	struct erow* prev_row = (EConf.cursory <= 0)? NULL : &EConf.row[EConf.cursory - 1];
-	struct erow* curr_row = (EConf.cursory >= EConf.numrows)? NULL : &EConf.row[EConf.cursory];
-	struct erow* next_row = (EConf.cursory == EConf.numrows)? NULL : &EConf.row[EConf.cursory + 1];		
+	struct erow* curr_row = (EConf.cursory > EConf.numrows || EConf.numrows <= 1)? NULL : &EConf.row[EConf.cursory];
+	struct erow* next_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory + 1];		
 
 	switch(movement)
 	{
 		case _UP:
-			moveUp(prev_row);
+			moveUp();
 			break;
 
 		case _DOWN:
-			moveDown(next_row);
+			moveDown();
 			break;
 
 		case _LEFT:
-			moveLeft(prev_row);
-			saved_x = EConf.cursorx;
+			if(moveLeft(prev_row)) saved_x = EConf.cursorx;
 			break;
 
 		case _RIGHT:
-			moveRight(curr_row, next_row);
-			saved_x = EConf.cursorx;
+			if(moveRight(curr_row, next_row)) saved_x = EConf.cursorx;
 			break;			
 
 		case PAGE_UP:
@@ -694,15 +695,22 @@ void moveCursor(int movement)
 			moveToEdge(movement, curr_row);
 			break;
 	}
-	curr_row = (EConf.cursory >= EConf.numrows)? NULL : &EConf.row[EConf.cursory];
-	if(saved_x > curr_row->size) EConf.cursorx = curr_row->size;
-	else if(curr_row->size > saved_x) EConf.cursorx = saved_x;
+	curr_row = (EConf.cursory > EConf.numrows)? NULL : &EConf.row[EConf.cursory];
+	if(curr_row)
+	{
+		if(saved_x >= curr_row->size) EConf.cursorx = curr_row->size;
+		else if(curr_row->size >= saved_x) EConf.cursorx = saved_x;
+	}
+	else saved_x = 0;
 }
 
 void processKey()
 {
 	static int quit_attempts = TIMES_TO_QUIT_UNSAVED;
 	int c = readKey();
+
+	struct erow* curr_row = (EConf.cursory < EConf.numrows && EConf.numrows >= 1)? &EConf.row[EConf.cursory] : NULL;
+	int atTheEndOfFile = (curr_row && EConf.cursorx == curr_row->size && EConf.cursory == EConf.numrows);	
 
 	switch(c)
 	{
@@ -739,7 +747,7 @@ void processKey()
 
 		case _BACKSPACE:
 		case _DELETE:
-			if(c == _DELETE && EConf.cursorx != EConf.row[EConf.cursory].size) moveCursor(_RIGHT);
+			if(c == _DELETE && !atTheEndOfFile) moveCursor(_RIGHT);
 			delChar();
 			break;
 

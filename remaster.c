@@ -19,12 +19,13 @@
 
 /* PREDECLARATIONS AND DOCUMENTATIONS | P&D */
 
-char* setPrompt(char* prompt);
 void refreshScreen();
 void clearScreen();
 int readKey();
-int cursorIsAt(int* x, int* y);
+int cursorIsAt(int *x, int *y);
 void setStatusMessage(const char* format_str, ...);
+
+char *setPrompt(char *prompt_buffer, void (*callback)(char *, int));
 
 /* DEFINITIONS */
 #define CTRL_P(c) ((c) & 0x1f)
@@ -37,7 +38,7 @@ void setStatusMessage(const char* format_str, ...);
 #define updBufQueue(ubuf, s, len) \
 	do { if(queue(ubuf, s, len) != (len)) died_of("Updating buffer error."); } while(0)
 
-void died_of(const char* cause)
+void died_of(const char *cause)
 {
 	perror(cause);
 	exit(1);
@@ -50,8 +51,8 @@ struct erow
 	int size;
 	int render_size;
 
-	char* text;
-	char* render_text;
+	char *text;
+	char *render_text;
 };
 
 enum arrows
@@ -86,11 +87,11 @@ struct editorConfig
 	int screencols, screenrows;
 	int numrows;
 
-	struct erow* row;
+	struct erow *row;
 
 	int isModified;
 
-	char* filename;
+	char *filename;
 	
 	char status_message[80];		
 	time_t status_message_time;
@@ -153,6 +154,21 @@ int CLE_cursorToRender(struct erow* row, int cursorx)
 		render_cursorx++;
 	}
 	return render_cursorx;
+}
+
+int CLE_renderToCursor(struct erow* row, int renderx)
+{
+	int curr_renderx = 0;
+	int t_cursorx;
+
+	for(t_cursorx = 0; t_cursorx < row->size; t_cursorx++)
+	{
+		if(row->text[t_cursorx] == '\t') curr_renderx += CLE_TAB_SIZE - (curr_renderx % CLE_TAB_SIZE);
+		else curr_renderx++;
+
+		if(curr_renderx > renderx) return t_cursorx;
+	}
+	return t_cursorx;
 }
 	
 void CLE_updateRow(struct erow* row)
@@ -245,7 +261,7 @@ void CLE_delCharFromRow(struct erow* row, int at)
 {
 	if(at < 0 || at > row->size) at = row->size;
 	
-	memmove(&row->text[at], &row->text[at + 1], row->size - at);
+	memmove(&row->text[at - 1], &row->text[at], row->size - at);
 	row->size--;
 	CLE_updateRow(row);
 	EConf.isModified++;
@@ -294,7 +310,7 @@ void delChar()
 		CLE_delCharFromRow(row, EConf.cursorx);
 		EConf.cursorx--;
 	}
-	else
+	else if(EConf.cursorx == 0)
 	{
 		EConf.cursorx = EConf.row[EConf.cursory - 1].size;
 		CLE_uniteRows(&EConf.row[EConf.cursory - 1], row->text, row->size);
@@ -380,7 +396,7 @@ void cle_saveFile()
 {
 	if(EConf.filename == NULL)
 	{
-		EConf.filename = setPrompt("Save as: %s");
+		EConf.filename = setPrompt("Save as: %s [ESC to cancel]", NULL);
 		if(EConf.filename == NULL)
 		{
 			setStatusMessage("Saving aborted.");
@@ -393,8 +409,62 @@ void cle_saveFile()
 	
 	if(!cle_fileTruncate(file_len, file_buffer))
 	{
-		setStatusMessage("The saving thing has majestically fucked up.");
+		setStatusMessage("File truncation failed miserably.");
 	}
+}
+
+/* SEARCH */
+
+void CLE_searchCallback(char *query, int c)
+{
+	static int last_match = -1;
+	static int direction = 1;
+	
+	switch (c)
+	{
+		case '\r':
+		case '\x1b':
+			last_match = -1;
+			direction = 1;
+			return;
+
+		case _RIGHT:
+		case _DOWN:
+			direction = 1;
+			break;
+
+		case _LEFT:
+		case _UP:
+			direction = -1;
+			break;
+		
+		default:
+			last_match = -1;
+			direction = 1;
+			break;
+	}
+
+	int i;
+	for(i = 0; i < EConf.numrows; i++)
+	{
+		struct erow* row = &EConf.row[i];
+		char* match = strstr(row->render_text, query);
+		if(match)
+		{
+			int cursor_offset = EConf.cursory - EConf.y_offset;
+			EConf.cursory = i;
+			EConf.y_offset = EConf.cursory - cursor_offset;
+			EConf.cursorx = CLE_renderToCursor(row, match - row->render_text);
+			break;
+		}
+	}
+}
+
+void CLE_search()
+{
+	char* query = setPrompt("Search for: %s [ESC to cancel]", CLE_searchCallback);
+
+	if(query) free(query);
 }
 
 /* BUFFER FOR WRITE QUEUE */
@@ -455,7 +525,7 @@ void expandBuffer(char* buffer, int buffer_size)
 	buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
 }
 
-char* setPrompt(char* prompt)
+char* setPrompt(char* prompt, void (*callback)(char *, int))
 {
 	size_t buffer_size = 128;
 	char* prompt_buffer = malloc(buffer_size);
@@ -480,12 +550,14 @@ char* setPrompt(char* prompt)
 		else if(c == '\x1b')
 		{
 			setStatusMessage("");
+			if(callback) callback(prompt_buffer, c);
 			free(prompt_buffer);
 			return NULL;
 		}
 		else if(noPrompt)
 		{
 			setStatusMessage("");
+			if(callback) callback(prompt_buffer, c);
 			return prompt_buffer;
 		} 
 		else if(isValidChar)
@@ -496,8 +568,11 @@ char* setPrompt(char* prompt)
 		}
 		else if(c == '\r')
 		{
+			setStatusMessage("");
+			if(callback) callback(prompt_buffer, c);
 			return prompt_buffer;
 		}
+		if(callback) callback(prompt_buffer, c);
 	}
 }
 
@@ -683,7 +758,7 @@ void moveCursor(int movement)
 
 		case _DOWN:
 			moveDown();
-			if(next_row && saved_x > next_row->size) EConf.cursorx = prev_row->size;
+			if(next_row && saved_x > next_row->size) EConf.cursorx = next_row->size;
 			else if(next_row && saved_x <= next_row->size) EConf.cursorx = saved_x;
 			break;
 
@@ -712,9 +787,13 @@ void processKey()
 	static int quit_attempts = TIMES_TO_QUIT_UNSAVED;
 	int c = readKey();
 
-	struct erow* curr_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory];
-	struct erow* next_row = (EConf.cursory >= EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory + 1];	
+	struct erow* curr_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? 
+							NULL : &EConf.row[EConf.cursory];
+	struct erow *next_row = (EConf.cursory >= EConf.numrows - 1 || EConf.cursory < 0)? 
+							NULL : &EConf.row[EConf.cursory + 1];	
 
+	int startOfFile = (EConf.cursorx == 0 && EConf.cursory == 0);
+	
 	switch(c)
 	{
 		case CTRL_P('q'):
@@ -729,7 +808,11 @@ void processKey()
 			break;
 
 		case CTRL_P('s'):
-			cle_saveFile();
+			cle_saveFile(); // TODO: ESC key delay — caused by escape sequence timeout. Fix when editor is feature-complete.
+			break;
+
+		case CTRL_P('f'):
+			CLE_search();
 			break;
 	
 		case _UP:
@@ -751,7 +834,7 @@ void processKey()
 		case _BACKSPACE:
 		case _DELETE:
 			if(c == _DELETE && moveRight(curr_row, next_row)) delChar();
-			else if(c == _BACKSPACE) delChar();
+			else if(c == _BACKSPACE && !startOfFile) delChar();
 			break;
 
 		case '\x1b':
@@ -916,7 +999,7 @@ void editorInit()
 	EConf.isModified = 0;
 
 	if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) died_of("GWINSZ!");
-	EConf.screenrows -= 2; // Getting one spare line for status bar and one more line for status message bar.
+	EConf.screenrows -= 2; // Getting one spare line for filename and other info bar and one more line for status message bar.
 }
 
 int main(int argc, char* argv[])
@@ -929,7 +1012,7 @@ int main(int argc, char* argv[])
 		cle_launch(argv[1]);
 	}
 	
-	setStatusMessage("CTRL + {Q to quit, S to save}");
+	setStatusMessage("CTRL + { Q to quit, S to save, F to search }");
 
 	while(1)
 	{

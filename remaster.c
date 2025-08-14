@@ -604,30 +604,36 @@ int readKey()
 	return c;	
 }
 
-void moveLeft(struct erow* prev_row)
+int moveLeft(struct erow* prev_row)
 {
 	if(EConf.cursorx > 0)
 	{
 		EConf.cursorx--;
+		return 1;
 	}
 	else if(prev_row && EConf.cursorx == 0)
 	{
 		EConf.cursory--;
 		EConf.cursorx = prev_row->size;
+		return 1;
 	}
+	return 0;
 }
 
-void moveRight(struct erow* curr_row, struct erow* next_row)
+int moveRight(struct erow* curr_row, struct erow* next_row)
 {
 	if(curr_row && EConf.cursorx == curr_row->size && next_row)
 	{
 		EConf.cursory++;
 		EConf.cursorx = 0;
+		return 1;
 	}
-	else if(curr_row)
+	else if(curr_row && EConf.cursorx < curr_row->size)
 	{
 		EConf.cursorx++;
+		return 1;
 	}
+	return 0;
 }
 
 void moveUp()
@@ -664,17 +670,21 @@ void moveCursor(int movement)
 {
 	static int saved_x = 0;
 	struct erow* prev_row = (EConf.cursory <= 0)? NULL : &EConf.row[EConf.cursory - 1];
-	struct erow* curr_row = (EConf.cursory > EConf.numrows || EConf.numrows <= 1)? NULL : &EConf.row[EConf.cursory];
-	struct erow* next_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory + 1];		
+	struct erow* curr_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory];
+	struct erow* next_row = (EConf.cursory >= EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory + 1];		
 
 	switch(movement)
 	{
 		case _UP:
 			moveUp();
+			if(prev_row && saved_x > prev_row->size) EConf.cursorx = prev_row->size;
+			else if(prev_row && saved_x <= prev_row->size) EConf.cursorx = saved_x;
 			break;
 
 		case _DOWN:
 			moveDown();
+			if(next_row && saved_x > next_row->size) EConf.cursorx = prev_row->size;
+			else if(next_row && saved_x <= next_row->size) EConf.cursorx = saved_x;
 			break;
 
 		case _LEFT:
@@ -695,22 +705,15 @@ void moveCursor(int movement)
 			moveToEdge(movement, curr_row);
 			break;
 	}
-	curr_row = (EConf.cursory > EConf.numrows)? NULL : &EConf.row[EConf.cursory];
-	if(curr_row)
-	{
-		if(saved_x >= curr_row->size) EConf.cursorx = curr_row->size;
-		else if(curr_row->size >= saved_x) EConf.cursorx = saved_x;
-	}
-	else saved_x = 0;
-}
+}	
 
 void processKey()
 {
 	static int quit_attempts = TIMES_TO_QUIT_UNSAVED;
 	int c = readKey();
 
-	struct erow* curr_row = (EConf.cursory < EConf.numrows && EConf.numrows >= 1)? &EConf.row[EConf.cursory] : NULL;
-	int atTheEndOfFile = (curr_row && EConf.cursorx == curr_row->size && EConf.cursory == EConf.numrows);	
+	struct erow* curr_row = (EConf.cursory > EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory];
+	struct erow* next_row = (EConf.cursory >= EConf.numrows - 1 || EConf.cursory < 0)? NULL : &EConf.row[EConf.cursory + 1];	
 
 	switch(c)
 	{
@@ -747,8 +750,8 @@ void processKey()
 
 		case _BACKSPACE:
 		case _DELETE:
-			if(c == _DELETE && !atTheEndOfFile) moveCursor(_RIGHT);
-			delChar();
+			if(c == _DELETE && moveRight(curr_row, next_row)) delChar();
+			else if(c == _BACKSPACE) delChar();
 			break;
 
 		case '\x1b':

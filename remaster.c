@@ -24,6 +24,7 @@ void clearScreen();
 int readKey();
 int cursorIsAt(int *x, int *y);
 void setStatusMessage(const char* format_str, ...);
+void expandBuffer(char* buffer, size_t *buffer_size);
 
 char *setPrompt(char *prompt_buffer, void (*callback)(char *, int));
 
@@ -415,49 +416,90 @@ void cle_saveFile()
 
 /* SEARCH */
 
-void CLE_searchCallback(char *query, int c)
+struct searchDB
 {
-	static int last_match = -1;
-	static int direction = 1;
+	size_t init_matches_size;
+	int actual_matches_size;
 	
-	switch (c)
+	char **matches;
+	int *matches_rows;
+};
+
+struct searchDB search_init()
+{
+	struct searchDB s;
+	s.init_matches_size = 8;
+	s.actual_matches_size = 0;
+
+	s.matches = malloc(s.init_matches_size);
+	s.matches_rows = malloc(s.init_matches_size);
+
+	return s;
+}
+
+void CLE_searchScroll(struct searchDB *search, int movement)
+{
+	int current_match = 0;
+	
+	switch(movement)
 	{
-		case '\r':
-		case '\x1b':
-			last_match = -1;
-			direction = 1;
-			return;
-
-		case _RIGHT:
-		case _DOWN:
-			direction = 1;
-			break;
-
-		case _LEFT:
 		case _UP:
-			direction = -1;
+		case _LEFT:
+			current_match--;
+			if(current_match < 0) current_match = search->actual_matches_size;
 			break;
-		
-		default:
-			last_match = -1;
-			direction = 1;
+	
+		case _DOWN:
+		case _RIGHT:
+			current_match++;
+			if(current_match > search->actual_matches_size) current_match = 0;
 			break;
+
+		default: return;
+	}
+	
+	int cursor_offset = EConf.cursory - EConf.y_offset;
+	struct erow* row = &EConf.row[search->matches_rows[current_match]];
+	EConf.cursory = search->matches_rows[current_match];
+	EConf.y_offset = EConf.cursory - cursor_offset;
+	EConf.cursorx = CLE_renderToCursor(row, search->matches[current_match] - row->render_text);	
+}
+
+void CLE_searchCallback(char* query, int c)
+{
+	static int i = 0;
+	size_t j = 0;
+	struct searchDB searchConf = search_init(); 
+
+	if(c == '\r' || c == '\x1b')
+	{
+		i = 0;
+		searchConf.actual_matches_size = 0;
+		if(searchConf.matches) free(searchConf.matches);
+		if(searchConf.matches_rows) free(searchConf.matches_rows);
+		return;
 	}
 
-	int i;
-	for(i = 0; i < EConf.numrows; i++)
+	while(i < EConf.numrows)
 	{
-		struct erow* row = &EConf.row[i];
-		char* match = strstr(row->render_text, query);
+		struct erow *row = &EConf.row[i];
+		char *match = strstr(row->render_text, query);
 		if(match)
 		{
-			int cursor_offset = EConf.cursory - EConf.y_offset;
-			EConf.cursory = i;
-			EConf.y_offset = EConf.cursory - cursor_offset;
-			EConf.cursorx = CLE_renderToCursor(row, match - row->render_text);
-			break;
+			searchConf.matches[j] = match;
+			searchConf.matches_rows[j] = i;
+			searchConf.actual_matches_size++;
+			j++;
+			if(j == searchConf.init_matches_size - 1) 
+			{
+				searchConf.init_matches_size *= 2;
+				searchConf.matches = realloc(searchConf.matches, searchConf.init_matches_size);
+			}
 		}
+		i++;
 	}
+	
+	CLE_searchScroll(&searchConf, c);
 }
 
 void CLE_search()
@@ -471,7 +513,7 @@ void CLE_search()
 
 struct ubuf
 {
-    char* buf;
+    char *buffer;
     int len;
 };
 
@@ -479,11 +521,11 @@ struct ubuf
 
 int queue(struct ubuf* ubuf, const char* s, int len)
 {
-    char* new = realloc(ubuf->buf, ubuf->len + len);
+    char* new = realloc(ubuf->buffer, ubuf->len + len);
 
     if(new == NULL) return 0;
     memcpy(&new[ubuf->len], s, len);
-    ubuf->buf = new;
+    ubuf->buffer = new;
     ubuf->len += len;
 
     return len;
@@ -491,7 +533,7 @@ int queue(struct ubuf* ubuf, const char* s, int len)
 
 void updBufFree(struct ubuf* ubuf)
 {
-    free(ubuf->buf);
+    free(ubuf->buffer);
 }
 
 /* STATUS REPORTS */
@@ -519,10 +561,10 @@ int cursorIsAt(int* rows, int* cols)
 }
 
 /* INPUT PROCESSING */
-void expandBuffer(char* buffer, int buffer_size)
+void expandBuffer(char* buffer, size_t *buffer_size)
 {
-	buffer_size *= 2;
-	buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
+	*buffer_size *= 2;
+	buffer = realloc(buffer, *buffer_size); //Double the size and reallocate new amount of memory to the same block.
 }
 
 char* setPrompt(char* prompt, void (*callback)(char *, int))
@@ -562,7 +604,7 @@ char* setPrompt(char* prompt, void (*callback)(char *, int))
 		} 
 		else if(isValidChar)
 		{
-			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, buffer_size);
+			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, &buffer_size);
 			prompt_buffer[prompt_len++] = c;
 			prompt_buffer[prompt_len] = '\0';
 		}
@@ -944,9 +986,9 @@ void clearScreen()
 
 void traceCursor(struct ubuf* ubuf)
 {
-	char buf[32];
-	int buf_len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (EConf.cursory - EConf.y_offset) + 1, (EConf.render_cursorx - EConf.x_offset) + 1);
-	updBufQueue(ubuf, buf, buf_len);
+	char buffer[32];
+	int buffer_len = snprintf(buffer, sizeof(buffer), "\x1b[%d;%dH", (EConf.cursory - EConf.y_offset) + 1, (EConf.render_cursorx - EConf.x_offset) + 1);
+	updBufQueue(ubuf, buffer, buffer_len);
 }
 
 void refreshScreen()
@@ -966,7 +1008,7 @@ void refreshScreen()
 
 	updBufQueue(&ubuf, "\x1b[?25h", 6);
 
-	write(STDOUT_FILENO, ubuf.buf, ubuf.len);
+	write(STDOUT_FILENO, ubuf.buffer, ubuf.len);
 	updBufFree(&ubuf);
 }
 

@@ -24,7 +24,7 @@ void clearScreen();
 int readKey();
 int cursorIsAt(int *x, int *y);
 void setStatusMessage(const char* format_str, ...);
-void expandBuffer(char* buffer, size_t *buffer_size);
+void expandBuffer(char* buffer, size_t buffer_size);
 
 char *setPrompt(char *prompt_buffer, void (*callback)(char *, int));
 
@@ -160,16 +160,15 @@ int CLE_cursorToRender(struct erow* row, int cursorx)
 int CLE_renderToCursor(struct erow* row, int renderx)
 {
 	int curr_renderx = 0;
-	int t_cursorx;
+	int i;
 
-	for(t_cursorx = 0; t_cursorx < row->size; t_cursorx++)
+	for(i = 0; i < row->render_size; i++)
 	{
-		if(row->text[t_cursorx] == '\t') curr_renderx += CLE_TAB_SIZE - (curr_renderx % CLE_TAB_SIZE);
-		else curr_renderx++;
-
-		if(curr_renderx > renderx) return t_cursorx;
+		if(row->text[i] == '\t') curr_renderx += (CLE_TAB_SIZE - 1) - (curr_renderx % CLE_TAB_SIZE);
+		curr_renderx++;
+		if(curr_renderx > renderx) return i;
 	}
-	return t_cursorx;
+	return i;
 }
 	
 void CLE_updateRow(struct erow* row)
@@ -418,41 +417,41 @@ void cle_saveFile()
 
 struct searchDB
 {
-	size_t init_matches_size;
+	int init_matches_size;
 	int actual_matches_size;
 	
 	char **matches;
 	int *matches_rows;
 };
 
-struct searchDB search_init()
+struct searchDB *search_init()
 {
-	struct searchDB s;
-	s.init_matches_size = 8;
-	s.actual_matches_size = 0;
+	struct searchDB *s = malloc(sizeof *s);
+	s->init_matches_size = 8;
+	s->actual_matches_size = 0;
 
-	s.matches = malloc(s.init_matches_size);
-	s.matches_rows = malloc(s.init_matches_size);
+	s->matches = malloc(s->init_matches_size * sizeof(char*));
+	s->matches_rows = malloc(s->init_matches_size * sizeof(int));
 
 	return s;
 }
 
 void CLE_searchScroll(struct searchDB *search, int movement)
 {
-	int current_match = 0;
+	static int current_match = 0;
 	
 	switch(movement)
 	{
 		case _UP:
 		case _LEFT:
 			current_match--;
-			if(current_match < 0) current_match = search->actual_matches_size;
+			if(current_match < 0) current_match = search->actual_matches_size - 1;
 			break;
 	
 		case _DOWN:
 		case _RIGHT:
 			current_match++;
-			if(current_match > search->actual_matches_size) current_match = 0;
+			if(current_match > search->actual_matches_size - 1) current_match = 0;
 			break;
 
 		default: return;
@@ -462,22 +461,41 @@ void CLE_searchScroll(struct searchDB *search, int movement)
 	struct erow* row = &EConf.row[search->matches_rows[current_match]];
 	EConf.cursory = search->matches_rows[current_match];
 	EConf.y_offset = EConf.cursory - cursor_offset;
-	EConf.cursorx = CLE_renderToCursor(row, search->matches[current_match] - row->render_text);	
+	EConf.cursorx = CLE_cursorToRender(row, search->matches[current_match] - row->render_text);	
+}
+
+void searchReset(struct searchDB *s)
+{
+	s->init_matches_size = 8;
+	s->actual_matches_size = 0;
+	s->matches = realloc(s->matches, s->init_matches_size * sizeof(char *));
+	s->matches_rows = realloc(s->matches_rows, s->init_matches_size * sizeof(int));
 }
 
 void CLE_searchCallback(char* query, int c)
 {
 	static int i = 0;
-	size_t j = 0;
-	struct searchDB searchConf = search_init(); 
+	int j = 0;
+	int isArrow = (c == _UP || c == _DOWN || c == _LEFT || c == _RIGHT);
 
+	static struct searchDB *searchConf = NULL;
+
+	if(!searchConf)
+	{
+		searchConf = search_init();
+	}
+	
 	if(c == '\r' || c == '\x1b')
 	{
 		i = 0;
-		searchConf.actual_matches_size = 0;
-		if(searchConf.matches) free(searchConf.matches);
-		if(searchConf.matches_rows) free(searchConf.matches_rows);
+		searchReset(searchConf);
 		return;
+	}
+	else if(isArrow) CLE_searchScroll(searchConf, c);
+	else if(!isArrow) 
+	{
+		i = 0;
+		searchReset(searchConf);
 	}
 
 	while(i < EConf.numrows)
@@ -486,20 +504,19 @@ void CLE_searchCallback(char* query, int c)
 		char *match = strstr(row->render_text, query);
 		if(match)
 		{
-			searchConf.matches[j] = match;
-			searchConf.matches_rows[j] = i;
-			searchConf.actual_matches_size++;
+			searchConf->matches[j] = match;
+			searchConf->matches_rows[j] = i;
+			searchConf->actual_matches_size++;
 			j++;
-			if(j == searchConf.init_matches_size - 1) 
+			if(j == searchConf->init_matches_size - 1) 
 			{
-				searchConf.init_matches_size *= 2;
-				searchConf.matches = realloc(searchConf.matches, searchConf.init_matches_size);
+				searchConf->init_matches_size *= 2;
+				searchConf->matches = realloc(searchConf->matches, searchConf->init_matches_size * sizeof(char *));
+				searchConf->matches_rows = realloc(searchConf->matches_rows, searchConf->init_matches_size * sizeof(int));
 			}
 		}
 		i++;
 	}
-	
-	CLE_searchScroll(&searchConf, c);
 }
 
 void CLE_search()
@@ -561,10 +578,10 @@ int cursorIsAt(int* rows, int* cols)
 }
 
 /* INPUT PROCESSING */
-void expandBuffer(char* buffer, size_t *buffer_size)
+void expandBuffer(char* buffer, size_t buffer_size)
 {
-	*buffer_size *= 2;
-	buffer = realloc(buffer, *buffer_size); //Double the size and reallocate new amount of memory to the same block.
+	buffer_size *= 2;
+	buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
 }
 
 char* setPrompt(char* prompt, void (*callback)(char *, int))
@@ -604,7 +621,7 @@ char* setPrompt(char* prompt, void (*callback)(char *, int))
 		} 
 		else if(isValidChar)
 		{
-			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, &buffer_size);
+			if(prompt_len == buffer_size - 1) expandBuffer(prompt_buffer, buffer_size);
 			prompt_buffer[prompt_len++] = c;
 			prompt_buffer[prompt_len] = '\0';
 		}

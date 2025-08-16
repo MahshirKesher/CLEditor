@@ -150,7 +150,7 @@ int CLE_cursorToRender(struct erow* row, int cursorx)
 	int render_cursorx = 0;
 	for(int i = 0; i < cursorx; i++)
 	{
-		if(row->text[i] == '\t') render_cursorx += (CLE_TAB_SIZE - 1) - (render_cursorx & CLE_TAB_SIZE);
+		if(row->text[i] == '\t') render_cursorx += (CLE_TAB_SIZE - 1) - (render_cursorx % CLE_TAB_SIZE);
 		
 		render_cursorx++;
 	}
@@ -159,18 +159,19 @@ int CLE_cursorToRender(struct erow* row, int cursorx)
 
 int CLE_renderToCursor(struct erow* row, int renderx)
 {
-	int curr_renderx = 0;
-	int i;
-
-	for(i = 0; i < row->render_size; i++)
-	{
-		if(row->text[i] == '\t') curr_renderx += (CLE_TAB_SIZE - 1) - (curr_renderx % CLE_TAB_SIZE);
-		curr_renderx++;
-		if(curr_renderx > renderx) return i;
-	}
-	return i;
-}
+	int cursorx;
+	int t_renderx = 0;
 	
+	for(cursorx = 0; cursorx < row->size; cursorx++)
+	{
+		if(row->text[cursorx] == '\t') t_renderx += CLE_TAB_SIZE - (t_renderx % CLE_TAB_SIZE);
+		else t_renderx++;
+
+		if(t_renderx > renderx) return cursorx;
+	}
+	return cursorx;
+}
+
 void CLE_updateRow(struct erow* row)
 {
 	int tab_count = 0;
@@ -436,6 +437,15 @@ struct searchDB *search_init()
 	return s;
 }
 
+void CLE_searchCursorReposition(struct searchDB *search, int match)
+{
+	int cursor_offset = EConf.cursory - EConf.y_offset;
+	struct erow* row = &EConf.row[search->matches_rows[match]];
+	EConf.cursory = search->matches_rows[match];
+	EConf.y_offset = EConf.cursory - cursor_offset;
+	EConf.cursorx = CLE_renderToCursor(row, search->matches[match] - row->render_text);
+}
+
 void CLE_searchScroll(struct searchDB *search, int movement)
 {
 	static int current_match = 0;
@@ -457,46 +467,19 @@ void CLE_searchScroll(struct searchDB *search, int movement)
 		default: return;
 	}
 	
-	int cursor_offset = EConf.cursory - EConf.y_offset;
-	struct erow* row = &EConf.row[search->matches_rows[current_match]];
-	EConf.cursory = search->matches_rows[current_match];
-	EConf.y_offset = EConf.cursory - cursor_offset;
-	EConf.cursorx = CLE_cursorToRender(row, search->matches[current_match] - row->render_text);	
+	CLE_searchCursorReposition(search, current_match);	
 }
 
 void searchReset(struct searchDB *s)
 {
 	s->init_matches_size = 8;
 	s->actual_matches_size = 0;
-	s->matches = realloc(s->matches, s->init_matches_size * sizeof(char *));
-	s->matches_rows = realloc(s->matches_rows, s->init_matches_size * sizeof(int));
 }
 
-void CLE_searchCallback(char* query, int c)
+void CLE_searchFindMatches(struct searchDB *searchConf, char* query)
 {
-	static int i = 0;
 	int j = 0;
-	int isArrow = (c == _UP || c == _DOWN || c == _LEFT || c == _RIGHT);
-
-	static struct searchDB *searchConf = NULL;
-
-	if(!searchConf)
-	{
-		searchConf = search_init();
-	}
-	
-	if(c == '\r' || c == '\x1b')
-	{
-		i = 0;
-		searchReset(searchConf);
-		return;
-	}
-	else if(isArrow) CLE_searchScroll(searchConf, c);
-	else if(!isArrow) 
-	{
-		i = 0;
-		searchReset(searchConf);
-	}
+	int i = 0;
 
 	while(i < EConf.numrows)
 	{
@@ -508,7 +491,7 @@ void CLE_searchCallback(char* query, int c)
 			searchConf->matches_rows[j] = i;
 			searchConf->actual_matches_size++;
 			j++;
-			if(j == searchConf->init_matches_size - 1) 
+			if(j == searchConf->init_matches_size - 1)
 			{
 				searchConf->init_matches_size *= 2;
 				searchConf->matches = realloc(searchConf->matches, searchConf->init_matches_size * sizeof(char *));
@@ -516,6 +499,33 @@ void CLE_searchCallback(char* query, int c)
 			}
 		}
 		i++;
+	}
+}
+
+
+void CLE_searchCallback(char* query, int c)
+{
+	int isArrow = (c == _UP || c == _DOWN || c == _LEFT || c == _RIGHT);
+	int isStop = (c == '\r' || c == '\x1b' || c == CTRL_P('f'));
+
+	static struct searchDB *searchConf = NULL;
+
+	if(!searchConf)
+	{
+		searchConf = search_init();
+	}
+	
+	if(isStop)
+	{
+		searchReset(searchConf);
+		return;
+	}
+	else if(isArrow) CLE_searchScroll(searchConf, c);
+	else if(!isArrow && !isStop) 
+	{
+		searchReset(searchConf);
+		CLE_searchFindMatches(searchConf, query);
+		CLE_searchCursorReposition(searchConf, 0);
 	}
 }
 

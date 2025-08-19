@@ -429,18 +429,18 @@ struct search
 	int* match_x;
 	int* match_y;
 
-	int match_number;
+	int current_match;
 };
 
 struct search *search_init()
 {
 	struct search *SConf = malloc(sizeof *SConf);
+	if(!SConf) return NULL;
 
-	SConf->initial_size = 32;
+	SConf->initial_size = 64;
 	SConf->actual_size = 0;
 	SConf->current_capacity = SConf->initial_size;
-	SConf->match_number = 0;
-	
+
 	SConf->match_x = malloc(SConf->initial_size * sizeof(int));
 	if(!SConf->match_x)
 	{
@@ -451,134 +451,158 @@ struct search *search_init()
 	if(!SConf->match_y)
 	{
 		free(SConf->match_x);
-		SConf->match_x = NULL;
 		free(SConf);
 		return NULL;
 	}
+
+	SConf->current_match = 0;
 	return SConf;
 }
 
-void search_empty(struct search *SConf)
+void search_emptyContents(struct search *SConf)
 {
-	free(SConf->match_x);
-	free(SConf->match_y);
+	if(!SConf) return;	
 
-	SConf->match_x = NULL;
-	SConf->match_y = NULL;
+	if(SConf->match_x) 
+	{
+		free(SConf->match_x);
+		SConf->match_x = NULL;
+	}
+	if(SConf->match_y) 
+	{
+		free(SConf->match_y);
+		SConf->match_y = NULL;
+	}
 
-	free(SConf);
+	SConf->actual_size = 0;
+	SConf->current_capacity = 0;
+	SConf->current_match = 0;
 }
 
-int search_findMatches(struct search *SConf, char *query)
+void search_resetContents(struct search *SConf)
+{
+	SConf->current_capacity = SConf->initial_size;
+	SConf->actual_size = 0;
+	SConf->current_match = 0;
+
+	int* temp_x = realloc(SConf->match_x, SConf->initial_size * sizeof(int));
+	if(!temp_x)
+	{
+		search_emptyContents(SConf);
+		return;
+	}
+	else SConf->match_x = temp_x;
+
+	int* temp_y = realloc(SConf->match_y, SConf->initial_size * sizeof(int));
+	if(!temp_y)
+	{
+		search_emptyContents(SConf);
+		return;
+	}
+	else SConf->match_y = temp_y;	
+
+	memset(SConf->match_x, 0, SConf->initial_size * sizeof(int));
+	memset(SConf->match_y, 0, SConf->initial_size * sizeof(int));
+}
+
+void search_expandArrays(struct search *SConf)
+{
+	SConf->current_capacity *= 2;
+
+	int* temp_x = realloc(SConf->match_x, SConf->current_capacity * sizeof(int));
+	if(!temp_x)
+	{
+		search_emptyContents(SConf);
+		return;
+	}
+	else SConf->match_x = temp_x;
+
+	int* temp_y = realloc(SConf->match_y, SConf->current_capacity * sizeof(int));
+	if(!temp_y)
+	{
+		search_emptyContents(SConf);
+		return;
+	}
+	else SConf->match_y = temp_y;
+}
+
+void search_moveCursor(struct search *SConf, int match_number)
+{
+	int cursor_offset = EConf.cursory - EConf.y_offset;
+	EConf.cursory = SConf->match_y[match_number];
+	EConf.y_offset = (EConf.cursory - cursor_offset > 0)? EConf.cursory - cursor_offset : 0;
+	EConf.cursorx = SConf->match_x[match_number];	
+}
+
+void search_findMatches(struct search* SConf, char* query)
 {
 	for(int i = 0; i < EConf.numrows; i++)
 	{
-		struct erow *row = &EConf.row[i];
-		char* match = strstr(row->render_text, query);
+		struct erow* row = &EConf.row[i];
+		char *match = strstr(row->render_text, query);
 		if(match)
 		{
 			SConf->match_x[SConf->actual_size] = CLE_renderToCursor(row, match - row->render_text);
 			SConf->match_y[SConf->actual_size] = i;
 			SConf->actual_size++;
 		}
-		if(SConf->actual_size == SConf->current_capacity)
-		{
-			SConf->current_capacity *= 2;
-			int *temp_x = realloc(SConf->match_x, SConf->current_capacity * sizeof(int));
-			if(!temp_x)
-			{
-				search_empty(SConf);
-				return FAILURE;
-			}
-			else SConf->match_x = temp_x;			
-
-			int *temp_y = realloc(SConf->match_y, SConf->current_capacity * sizeof(int));
-			if(!temp_y)
-			{
-				search_empty(SConf);
-				return FAILURE;
-				
-			}
-			else SConf->match_y = temp_y;
-		}
+		if(SConf->actual_size >= SConf->current_capacity) search_expandArrays(SConf);
 	}
-	return SUCCESS;
+	if(SConf->actual_size > 0) search_moveCursor(SConf, 0);
 }
 
-int search_resetBuffer(struct search *SConf)
+void search_traverseMatches(struct search *SConf, int c)
 {
-	int *temp_x = realloc(SConf->match_x, SConf->initial_size * sizeof(int)); 
-	int *temp_y = realloc(SConf->match_y, SConf->initial_size * sizeof(int)); 
+	if(SConf->actual_size == 0) return;
 
-	if(!temp_x || !temp_y) 
-	{ 
-		search_empty(SConf);
-		return FAILURE; 
-	} 
-	else 
-	{ 
-		SConf->match_x = temp_x; 
-		SConf->match_y = temp_y; 
-	} 
-	
-	SConf->current_capacity = SConf->initial_size; 
-	SConf->actual_size = 0; 
+	switch(c)
+	{
+		case _UP:
+		case _LEFT:
+			SConf->current_match = (SConf->current_match - 1 < 0)? SConf->actual_size - 1 : SConf->current_match - 1;
+			break;
 
-	memset(SConf->match_x, 0, SConf->current_capacity * sizeof(int)); 
-	memset(SConf->match_y, 0, SConf->current_capacity * sizeof(int)); 
-	
-	SConf->match_number = 0;
-
-	return SUCCESS;
+		case _DOWN:
+		case _RIGHT:
+			SConf->current_match = (SConf->current_match + 1 > SConf->actual_size - 1)? 0 : SConf->current_match + 1;
+			break;
+	}
+	search_moveCursor(SConf, SConf->current_match);
 }
 
-void search_traverse(struct search *SConf, int c)
+void search_control(char* query, int c)
 {
-	if(c == _UP || c == _LEFT) 
+	static struct search *SConf = NULL;
+
+	if(!SConf) SConf = search_init();
+
+	if(!SConf) return;	
+
+	int navigation = (c == _UP || c == _DOWN || c == _LEFT || c == _RIGHT);
+	int cancellation = (c == '\x1b' || c == '\r' || c == CTRL_P('f'));
+	int termination = (!SConf->match_x || !SConf->match_y);
+
+	if(termination || cancellation)
 	{
-		SConf->match_number--;
-		if(SConf->match_number < 0) SConf->match_number = SConf->actual_size - 1;
-	}
-	else if(c == _DOWN || c == _RIGHT)
-	{
-		SConf->match_number++;
-		if(SConf->match_number >= SConf->actual_size) SConf->match_number = 0;
-	}
-
-	int cursor_offset = EConf.cursory - EConf.y_offset;
-	EConf.cursory = SConf->match_y[SConf->match_number];
-	EConf.y_offset = EConf.cursory - cursor_offset;
-	EConf.cursorx = SConf->match_x[SConf->match_number];
-}
-
-void search_callback(char* query, int c)
-{
-	struct search *SConf = NULL;
-
-	SConf = search_init();
-
-	int isArrow = (c == _UP || c == _DOWN || c == _LEFT || c == _RIGHT);
-	int isStop = (c == '\x1b' || c == '\r');
-
-	if(isStop)
-	{
-		search_empty(SConf);
+		if(SConf->match_x || SConf->match_y) search_emptyContents(SConf);
+		free(SConf);
+		SConf = NULL;
 		return;
 	}
-	else if(isArrow)
+	else if(navigation)
 	{
-		search_traverse(SConf, c);
+		if(SConf->match_x && SConf->match_y && SConf->actual_size > 0) search_traverseMatches(SConf, c);
 	}
-	else
+	else if(query)
 	{
-		if(!search_resetBuffer(SConf)) return;
-		if(!search_findMatches(SConf, query)) return;
+		search_resetContents(SConf);
+		search_findMatches(SConf, query);
 	}
 }
 
 void cle_search()
 {
-	char *query = setPrompt("Search for: %s [ESC to cancel]", search_callback);
+	char* query = setPrompt("Search for: %s [ESC to cancel]", search_control);
 	if(query) free(query);
 }
 
@@ -637,7 +661,13 @@ int cursorIsAt(int* rows, int* cols)
 void expandBuffer(char* buffer, size_t buffer_size)
 {
 	buffer_size *= 2;
-	buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
+	char *t_buffer = realloc(buffer, buffer_size); //Double the size and reallocate new amount of memory to the same block.
+	if(!t_buffer)
+	{
+		free(buffer);
+		buffer = NULL;
+	}
+	else buffer = t_buffer;
 }
 
 char* setPrompt(char* prompt, void (*callback)(char *, int))
@@ -1115,7 +1145,7 @@ void editorInit()
 	EConf.isModified = 0;
 
 	if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) died_of("GWINSZ!");
-	EConf.screenrows -= 2; // Getting one spare line for filename and other info bar and one more line for status message bar.
+	EConf.screenrows -= 2; // Getting one spare line for filename and other info bar and one more line for status message bar
 }
 
 int main(int argc, char* argv[])

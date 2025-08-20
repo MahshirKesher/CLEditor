@@ -59,6 +59,9 @@ struct erow
 
 	char *text;
 	char *render_text;
+
+	unsigned char* highlight;
+	int highlight_size;
 };
 
 enum arrows
@@ -80,6 +83,16 @@ enum charManipulation
 {
 	_BACKSPACE = 127,
  	_DELETE
+};
+
+enum highlight_color
+{
+	HL_DEFAULT = 0,
+	HL_NUMBER,
+	HL_STRING,
+	HL_COMMENT,
+	HL_DATATYPE,
+	HL_KEYWORD_OPERATOR
 };
 
 /* TERMINAL SETUP */
@@ -148,6 +161,100 @@ int GWINSZ(int* rows, int* cols)
 		return 0;
 	}
 }
+
+/* SYNTAX HIGHLIGHTING */
+
+void syntax_defineString(struct erow *row, int *currentString, int *i)
+{
+	int specialQuote = (row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '\'' || row->render_text[*i + 1] == '\"'));
+	int endOfRow = (*i == row->render_size - 1);
+
+	*currentString = row->render_text[*i];
+	row->highlight[*i++] = HL_STRING;
+	while(!endOfRow && row->render_text[*i] != *currentString)
+	{
+		if(*currentString == '\'' && !endOfRow && specialQuote) 
+		{
+			row->highlight[*i] = HL_STRING;
+			row->highlight[*i + 1] = HL_STRING;
+			*i += 2;
+		}
+		else row->highlight[*i++] = HL_STRING;
+		endOfRow = (*i == row->render_size - 1);
+		specialQuote = (row->render_text[*i] == '\\' && row->render_text[*i + 1] == '\'');
+	}
+	row->highlight[*i] = HL_STRING;
+	*currentString = 0;
+}
+
+void syntax_defineSLComment(struct erow *row, int *i)
+{
+	while(*i < row->render_size)
+	{
+		row->highlight[*i] = HL_COMMENT;
+	}
+}
+
+int syntax_defineMLComment(struct erow *row, int *i)
+{
+	int endOfMLComment = (*i + 1 < row->render_size)? (row->render_text[*i] == '*' && row->render_text[*i + 1] == '/') : 0;
+	while(!endOfMLComment && *i < row->render_size)
+	{
+		row->highlight[*i++] = HL_COMMENT;
+		endOfMLComment = (*i + 1 < row->render_size)? (row->render_text[*i] == '*' && row->render_text[*i + 1] == '/') : 0;
+	}
+	if(endOfMLComment) 
+	{
+		row->highlight[*i++] = HL_COMMENT; 
+		row->highlight[*i] = HL_COMMENT;
+		return 0;
+	}
+	return 1;
+}
+
+void syntax_defineKeyword()
+{
+
+}
+
+void syntax_updateIndexes(struct erow *row)
+{
+	unsigned char *t_highlight = realloc(row->highlight, row->render_size);
+	row->highlight_size = row->render_size;
+	if(!t_highlight)
+	{
+		memset(row->highlight, HL_DEFAULT, row->highlight_size);
+		return;
+	}
+	else row->highlight = t_highlight;
+
+	memset(row->highlight, HL_DEFAULT, row->render_size);
+
+	int isDigit, isEdgeOfString, isSLComment, isMLComment; //SL = single-line, ML = multi-line;
+	int currentString = 0;  
+
+	for(int i = 0; i < row->render_size; i++)
+	{
+		isDigit = isdigit(row->render_text[i]);
+		isEdgeOfString = (row->render_text[i] == '\'' || row->render_text[i] == '"'); 		
+		if(i + 1 < row->render_size - 1) 
+		{
+			isSLComment = (row->render_text[i] == '/' && row->render_text[i + 1] == '/');
+			isMLComment = (row->render_text[i] == '/' && row->render_text[i + 1] == '*');
+		}
+
+		if(isDigit) row->highlight[i] = HL_NUMBER;
+		else if(isEdgeOfString) syntax_defineString(row, &currentString, &i);
+		else if(isSLComment) syntax_defineSLComment(row, &i);
+		else if(isMLComment)
+		{
+			isMLComment = syntax_defineMLComment(row, &i);
+		}
+		//else if(isKeyword) TODO: syntax_defineKeyword(row, &i);
+		//else if(isDatatype) TODO: syntax_defineDatatype(row, &i);
+	}
+}
+
 /* ROW PROCESSING */
 
 int CLE_cursorToRender(struct erow* row, int cursorx)
@@ -213,6 +320,8 @@ void CLE_appendRow (int to_process, char* s, size_t len)
 	EConf.row[to_process].text[len] = '\0';
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
+	EConf.row[to_process].highlight = NULL;
+	EConf.row[to_process].highlight_size = 0;
 
 	CLE_updateRow(&EConf.row[to_process]);
 
@@ -224,6 +333,7 @@ void CLE_freeRow(struct erow* row)
 {
 	free(row->render_text);
 	free(row->text);
+	free(row->highlight);
 }
 
 void CLE_delRow(int at)
@@ -430,6 +540,7 @@ struct search
 	int* match_y;
 
 	int current_match;
+	int cursor_offset;
 };
 
 struct search *search_init()
@@ -456,6 +567,7 @@ struct search *search_init()
 	}
 
 	SConf->current_match = 0;
+	SConf->cursor_offset = 0;
 	return SConf;
 }
 
@@ -477,6 +589,7 @@ void search_emptyContents(struct search *SConf)
 	SConf->actual_size = 0;
 	SConf->current_capacity = 0;
 	SConf->current_match = 0;
+	SConf->cursor_offset = 0;
 }
 
 void search_resetContents(struct search *SConf)
@@ -484,6 +597,7 @@ void search_resetContents(struct search *SConf)
 	SConf->current_capacity = SConf->initial_size;
 	SConf->actual_size = 0;
 	SConf->current_match = 0;
+	SConf->cursor_offset = 0;
 
 	int* temp_x = realloc(SConf->match_x, SConf->initial_size * sizeof(int));
 	if(!temp_x)
@@ -528,9 +642,8 @@ void search_expandArrays(struct search *SConf)
 
 void search_moveCursor(struct search *SConf, int match_number)
 {
-	int cursor_offset = EConf.cursory - EConf.y_offset;
 	EConf.cursory = SConf->match_y[match_number];
-	EConf.y_offset = (EConf.cursory - cursor_offset > 0)? EConf.cursory - cursor_offset : 0;
+	EConf.y_offset = (EConf.cursory - SConf->cursor_offset > 0)? EConf.cursory - SConf->cursor_offset : 0;
 	EConf.cursorx = SConf->match_x[match_number];	
 }
 
@@ -596,7 +709,9 @@ void search_control(char* query, int c)
 	else if(query)
 	{
 		search_resetContents(SConf);
+		SConf->cursor_offset = EConf.cursory - EConf.y_offset;	
 		search_findMatches(SConf, query);
+		SConf->cursor_offset = EConf.cursory - EConf.y_offset;
 	}
 }
 

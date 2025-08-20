@@ -164,96 +164,55 @@ int GWINSZ(int* rows, int* cols)
 
 /* SYNTAX HIGHLIGHTING */
 
-void syntax_defineString(struct erow *row, int *currentString, int *i)
+#define HL_NUMBER (1<<0)
+#define HL_STRING (1<<1)
+
+struct syntax
 {
-	int specialQuote = (row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '\'' || row->render_text[*i + 1] == '\"'));
-	int endOfRow = (*i == row->render_size - 1);
+	char *filetype;
+	char **file_exts;
 
-	*currentString = row->render_text[*i];
-	row->highlight[*i++] = HL_STRING;
-	while(!endOfRow && row->render_text[*i] != *currentString)
-	{
-		if(*currentString == '\'' && !endOfRow && specialQuote) 
-		{
-			row->highlight[*i] = HL_STRING;
-			row->highlight[*i + 1] = HL_STRING;
-			*i += 2;
-		}
-		else row->highlight[*i++] = HL_STRING;
-		endOfRow = (*i == row->render_size - 1);
-		specialQuote = (row->render_text[*i] == '\\' && row->render_text[*i + 1] == '\'');
-	}
-	row->highlight[*i] = HL_STRING;
-	*currentString = 0;
-}
+	char *MLComment_start;
+	char *MLComment_end;
+	char *SLComment;
 
-void syntax_defineSLComment(struct erow *row, int *i)
+	char **datatypes;
+	char **keywords;
+
+	int HL_flags;
+};
+
+char *C_mainExts[] = { "*.c", "*.h", NULL };
+
+char *C_mainDatatypes[] = 
+{ 
+	"int", "char", "float", "double", "long", "short", "const", "volatile", "restrict", "static",
+	"_Bool", "_Complex", "_Imaginary", "inline", "register", 
+	"signed", "unsigned", "void", "struct", "enum", "union", "typedef", NULL 
+};         
+
+char *C_mainKeywords[] = 
+{ 
+	"if", "else", "for", "do", "while", "break",
+	"goto", "sizeof", "extern", "auto", "default",
+	"_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local",
+	"continue", "switch", "case", "return", NULL 
+};
+
+struct syntax c = 
 {
-	while(*i < row->render_size)
-	{
-		row->highlight[*i] = HL_COMMENT;
-	}
-}
+	"c",
+	C_mainExts,
+	
+	"/*",
+	"*/",
+	"//",
+	
+	C_mainDatatypes,
+	C_mainKeywords,
 
-int syntax_defineMLComment(struct erow *row, int *i)
-{
-	int endOfMLComment = (*i + 1 < row->render_size)? (row->render_text[*i] == '*' && row->render_text[*i + 1] == '/') : 0;
-	while(!endOfMLComment && *i < row->render_size)
-	{
-		row->highlight[*i++] = HL_COMMENT;
-		endOfMLComment = (*i + 1 < row->render_size)? (row->render_text[*i] == '*' && row->render_text[*i + 1] == '/') : 0;
-	}
-	if(endOfMLComment) 
-	{
-		row->highlight[*i++] = HL_COMMENT; 
-		row->highlight[*i] = HL_COMMENT;
-		return 0;
-	}
-	return 1;
-}
-
-void syntax_defineKeyword()
-{
-
-}
-
-void syntax_updateIndexes(struct erow *row)
-{
-	unsigned char *t_highlight = realloc(row->highlight, row->render_size);
-	row->highlight_size = row->render_size;
-	if(!t_highlight)
-	{
-		memset(row->highlight, HL_DEFAULT, row->highlight_size);
-		return;
-	}
-	else row->highlight = t_highlight;
-
-	memset(row->highlight, HL_DEFAULT, row->render_size);
-
-	int isDigit, isEdgeOfString, isSLComment, isMLComment; //SL = single-line, ML = multi-line;
-	int currentString = 0;  
-
-	for(int i = 0; i < row->render_size; i++)
-	{
-		isDigit = isdigit(row->render_text[i]);
-		isEdgeOfString = (row->render_text[i] == '\'' || row->render_text[i] == '"'); 		
-		if(i + 1 < row->render_size - 1) 
-		{
-			isSLComment = (row->render_text[i] == '/' && row->render_text[i + 1] == '/');
-			isMLComment = (row->render_text[i] == '/' && row->render_text[i + 1] == '*');
-		}
-
-		if(isDigit) row->highlight[i] = HL_NUMBER;
-		else if(isEdgeOfString) syntax_defineString(row, &currentString, &i);
-		else if(isSLComment) syntax_defineSLComment(row, &i);
-		else if(isMLComment)
-		{
-			isMLComment = syntax_defineMLComment(row, &i);
-		}
-		//else if(isKeyword) TODO: syntax_defineKeyword(row, &i);
-		//else if(isDatatype) TODO: syntax_defineDatatype(row, &i);
-	}
-}
+	HL_NUMBER | HL_STRING
+};
 
 /* ROW PROCESSING */
 

@@ -61,7 +61,6 @@ struct erow
 	char *render_text;
 
 	unsigned char* highlight;
-	int highlight_size;
 };
 
 enum arrows
@@ -87,12 +86,13 @@ enum charManipulation
 
 enum highlight_color
 {
-	HL_DEFAULT = 0,
-	HL_NUMBER,
+	HL_NUMBER = 31,
 	HL_STRING,
-	HL_COMMENT,
 	HL_DATATYPE,
-	HL_KEYWORD_OPERATOR
+	HL_KEYWORD_OPERATOR,
+	HL_MATCH,
+	HL_COMMENT,
+	HL_DEFAULT
 };
 
 /* TERMINAL SETUP */
@@ -116,6 +116,8 @@ struct editorConfig
 	time_t status_message_time;
 
 	struct termios cooked;
+
+	struct syntax *SxConf;
 };
 
 struct editorConfig EConf;
@@ -176,6 +178,8 @@ struct syntax
 	char *MLComment_end;
 	char *SLComment;
 
+	char *stringDelimiters;
+
 	char **datatypes;
 	char **keywords;
 
@@ -183,6 +187,8 @@ struct syntax
 };
 
 char *C_mainExts[] = { "*.c", "*.h", NULL };
+
+char C_stringDelimiters[] = { '"', '\'', '\0' };
 
 char *C_mainDatatypes[] = 
 { 
@@ -199,20 +205,90 @@ char *C_mainKeywords[] =
 	"continue", "switch", "case", "return", NULL 
 };
 
-struct syntax c = 
+struct syntax highlight_database[] = 
 {
-	"c",
-	C_mainExts,
+	{
+		"c",
+		C_mainExts,
 	
-	"/*",
-	"*/",
-	"//",
-	
-	C_mainDatatypes,
-	C_mainKeywords,
+		"/*",
+		"*/",
+		"//",
 
-	HL_NUMBER | HL_STRING
+		C_stringDelimiters,
+	
+		C_mainDatatypes,
+		C_mainKeywords,
+
+		HL_NUMBER | HL_STRING
+	},
 };
+
+#define HL_ENTRIES (sizeof(highlight_database) / sizeof(highlight_database[0]));
+
+int syntax_defineString(struct erow *row, int endOfRow, int inString, int *i)
+{
+	int isEscapedQuote = 0;
+
+	if(!endOfRow) isEscapedQuote = (row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '"' || row->render_text[*i + 1] == '\'')); 
+	if(isEscapedQuote)
+	{
+		row->highlight[*i] = HL_STRING;
+		row->highlight[*i + 1] = HL_STRING;
+		*i += 2;
+		return inString;
+	}
+	char *isStringDelimiter = strchr(EConf.SxConf->stringDelimiters, row->render_text[*i]);
+	int sameOrNoDelimiter = (isStringDelimiter && (inString == 0 || inString == *isStringDelimiter));
+	if(!isEscapedQuote && sameOrNoDelimiter) return abs(inString - *isStringDelimiter);
+	else return inString; // If the same delimiter is found and it is not escaped, return the opposite of the current state. Return current state otherwise.
+}
+
+int syntax_defineMLComment(struct erow *row, int endOfRow)
+{
+	if(endOfRow) return 0;
+
+	char *MLComment_open = strstr(row->render_text, EConf.SxConf->MLComment_start);
+	if(MLComment_open)
+	{
+		return MLComment_open - row->render_text;
+	}
+	char *MLComment_closed = strstr(row->render_text, EConf.SxConf->MLComment_end);
+	if(MLComment_closed)
+	{
+		return MLComment_closed - row->render_text; //if found, return the index where the opening/closing of the comment is.
+	}
+	return 0; 
+}
+
+void syntax_updateIndexes(struct erow *row)
+{
+	unsigned char *t_highlight = realloc(row->highlight, row->render_size);
+	if(!t_highlight)
+	{
+		if(row->highlight) free(row->highlight);
+		row->highlight = NULL;
+		return;
+	}
+
+	int endOfRow;
+	int isSLComment, isDigit, isKeyword, isDatatype;
+	int isString = 0;
+	static int inString = 0;
+	static int inMLComment = 0;
+	
+	for(int i = 0; i < row->render_size; i++)
+	{
+		endOfRow = (i == row->render_size - 1);
+		
+		if(inString) 
+		{
+			inString = isString;
+			row->highlight[i] = HL_STRING;
+			continue;
+		}
+	}
+}
 
 /* ROW PROCESSING */
 
@@ -280,7 +356,6 @@ void CLE_appendRow (int to_process, char* s, size_t len)
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
 	EConf.row[to_process].highlight = NULL;
-	EConf.row[to_process].highlight_size = 0;
 
 	CLE_updateRow(&EConf.row[to_process]);
 
@@ -1102,7 +1177,7 @@ void drawStatusBar(struct ubuf* ubuf)
 														EConf.isModified? "[MODIFIED]" : "");
 
 	char right_status[80];
-	int right_status_len = snprintf(right_status, sizeof(right_status), "%d/%d", EConf.cursory + 1, EConf.numrows);
+	int right_status_len = snprintf(right_status, sizeof(right_status), "%s | %d/%d", EConf.SxConf? EConf.SxConf->filetype : "no filetype", EConf.cursory + 1, EConf.numrows);
 
 	updBufQueue(ubuf, status, status_len);
 	while(status_len < EConf.screencols)
@@ -1217,6 +1292,7 @@ void editorInit()
 	EConf.status_message_time = 0;
 	
 	EConf.isModified = 0;
+	EConf.SxConf = NULL;
 
 	if(GWINSZ(&EConf.screenrows, &EConf.screencols) == -1) died_of("GWINSZ!");
 	EConf.screenrows -= 2; // Getting one spare line for filename and other info bar and one more line for status message bar

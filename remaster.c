@@ -394,6 +394,7 @@ void syntax_updateIndexes(struct erow *row)
 		inMLComment = syntax_defineMLComment(row, endOfRow, inMLComment, &i);
 		isDigit = syntax_defineDigit(row, i);
 		isKeyword = syntax_defineKeyword(row, i);
+		isDatatype = syntax_defineDatatype(row, i);
 		if(endOfRow)
 		{
 			row->last_inString = inString;

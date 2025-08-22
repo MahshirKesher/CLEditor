@@ -25,7 +25,7 @@ int readKey();
 int cursorIsAt(int *x, int *y);
 void setStatusMessage(const char* format_str, ...);
 void expandBuffer(char* buffer, size_t buffer_size);
-
+						
 struct search;
 
 char *setPrompt(char *prompt_buffer, void (*callback)(char *, int));
@@ -88,10 +88,10 @@ enum charManipulation
 
 enum highlight_color
 {
-	HL_NUMBER = 31,
+	HL_DIGIT = 31,
 	HL_STRING,
 	HL_DATATYPE,
-	HL_KEYWORD_OPERATOR,
+	HL_KEYWORD,
 	HL_MATCH,
 	HL_COMMENT,
 	HL_DEFAULT
@@ -201,7 +201,7 @@ char *C_mainDatatypes[] =
 
 char *C_mainKeywords[] = 
 { 
-	"if", "else", "for", "do", "while", "break",
+	"if", "else", "for", "do", "while", "break", "#define", "#include",
 	"goto", "sizeof", "extern", "auto", "default",
 	"_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local",
 	"continue", "switch", "case", "return", NULL 
@@ -234,9 +234,8 @@ int syntax_defineString(struct erow *row, int endOfRow, int inString, int *i)
 	isEscapedQuote = (!endOfRow && inString && row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '\'' || row->render_text[*i + 1] == '"'));
 	if(isEscapedQuote)
 	{
-		memset(&row->highlight[*i], HL_STRING, 2);
-        *i++;
-        return inString;
+		memset(&row->highlight[*i++], HL_STRING, 2);
+		return inString;
 	} 
 
 	int foundQuote = 0;
@@ -317,6 +316,61 @@ int syntax_defineSLComment(struct erow *row, int endOfRow, int inSLComment, int 
 	else return inSLComment;
 }
 
+int syntax_defineSeparator(int c)
+{
+	return (isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[]{}:;", c) != NULL);	
+}
+
+int syntax_defineDigit(struct erow *row, int i)
+{
+	int currIsDigit = (row->render_text[i] >= '0' && row->render_text[i] <= '9');
+	int prevIsDigitOrSeparator = (i > 0 && syntax_defineSeparator(row->render_text[i - 1]));
+	int nextIsDigitOrSeparator = (syntax_defineSeparator(row->render_text[i + 1]));
+
+	if(prevIsDigitOrSeparator && currIsDigit && nextIsDigitOrSeparator) return YES;
+	else if(i == 0 && currIsDigit && nextIsDigitOrSeparator) return YES;
+	else return NO;
+}
+
+int syntax_defineKeyword(struct erow *row, int i)
+{
+	char **keywords = EConf.SxConf->keywords;
+
+	for(int j = 0; keywords[j]; j++)
+	{
+		int keyword_len = strlen(keywords[j]);
+		if(!strncmp(&row->render_text[i], keywords[j], strlen(keywords[j])) && syntax_defineSeparator(row->render_text[i + keyword_len]))
+		{
+			int prevIsSeparator = ((i == 0) || (i > 0 && syntax_defineSeparator(row->render_text[i - 1])));
+			if(prevIsSeparator) return keyword_len;
+		}
+	}
+/*	What is done here:
+*	1. If keyword is found, return its length so we know how many characters have to be painted and to move i past the keyword.
+*	2. Else return NO state.
+*/
+	return NO;
+}
+
+int syntax_defineDatatype(struct erow *row, int i)
+{
+	char **datatypes = EConf.SxConf->datatypes;
+
+    for(int j = 0; datatypes[j]; j++)
+    {
+        int datatype_len = strlen(datatypes[j]);
+        if(!strncmp(&row->render_text[i], datatypes[j], strlen(datatypes[j])) && syntax_defineSeparator(row->render_text[i + datatype_len]))
+        {
+            int prevIsSeparator = ((i == 0) || (i > 0 && syntax_defineSeparator(row->render_text[i - 1])));
+            if(prevIsSeparator) return datatype_len;
+        }
+    }
+/*  What is done here:
+*   This function is a straight up copy of a keyword one. Just the word "keyword" is changed to "datatype".
+*/
+    return NO;
+}
+
 void syntax_updateIndexes(struct erow *row)
 {
 	unsigned char *t_highlight = realloc(row->highlight, row->render_size);
@@ -338,6 +392,8 @@ void syntax_updateIndexes(struct erow *row)
 		endOfRow = (i == row->render_size - 1);
 		inString = syntax_defineString(row, endOfRow, inString, &i);
 		inMLComment = syntax_defineMLComment(row, endOfRow, inMLComment, &i);
+		isDigit = syntax_defineDigit(row, i);
+		isKeyword = syntax_defineKeyword(row, i);
 		if(endOfRow)
 		{
 			row->last_inString = inString;
@@ -373,7 +429,34 @@ void syntax_updateIndexes(struct erow *row)
 				break;
 		}
 
+		switch(isDigit)
+		{
+			case YES:
+				row->highlight[i] = HL_DIGIT;
+				break;
+
+			case NO: break;
+		}
+
+		switch(isKeyword)
+		{
+			case NO: break;
 		
+			default:
+				for(int j = i; j < i + isKeyword; j++) row->highlight[j] = HL_KEYWORD;
+				i += isKeyword - 1;
+				break;
+		}
+
+		switch(isDatatype)
+		{
+			case NO: break;
+
+			default:
+				for(int j = i; j < i + isDatatype; j++) row->highlight[j] = HL_DATATYPE;
+				i += isDatatype - 1;
+				break;
+		}
 	}
 }
 

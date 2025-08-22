@@ -61,6 +61,8 @@ struct erow
 	char *render_text;
 
 	unsigned char* highlight;
+	int last_inString;
+	int last_inMLComment;
 };
 
 enum arrows
@@ -226,60 +228,93 @@ struct syntax highlight_database[] =
 
 #define HL_ENTRIES (sizeof(highlight_database) / sizeof(highlight_database[0]));
 
-#define STR_ESC_QUOTE 2
-
-int syntax_defineString(struct erow *row, int endOfRow, int inString, int i)
+int syntax_defineString(struct erow *row, int endOfRow, int inString, int *i)
 {
 	int isEscapedQuote = 0;
-	isEscapedQuote = (!endOfRow && row->render_text[i] == '\\' && (row->render_text[i + 1] == '\'' || row->render_text[i + 1] == '"'));
-	if(isEscapedQuote) return STR_ESC_QUOTE; 
+	isEscapedQuote = (!endOfRow && inString && row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '\'' || row->render_text[*i + 1] == '"'));
+	if(isEscapedQuote)
+	{
+		memset(&row->highlight[*i], HL_STRING, 2);
+        *i++;
+        return inString;
+	} 
 
 	int foundQuote = 0;
-	char *quote = strchr(EConf.SxConf->stringDelimiters, row->render_text[i]);
+	char *quote = strchr(EConf.SxConf->stringDelimiters, row->render_text[*i]);
 	if(quote) foundQuote = abs(inString - *quote);
 /*
-*	1. if quote is found and *inString == 0, we get ASCII value of a found quote. 
-*	2. if *inString == *quote, we get 0. 
-*	3. if we find the other quote, we get 5 (" is 34 and ' is 39 so we get the difference).  
+*	1. if quote is found and inString == 0, we get ASCII value of a found quote. 
+*	2. if inString == *quote, we get 0. 
+*	3. if we find the other quote, we get 5 (" is 34 and ' is 39 so we get the difference). Covered by default case just carrying on the current state.  
 */
 	switch(foundQuote)
 	{
 		case 0:
 			return 0;
 
-		case 5:
-			return inString;
-
 		case '\'':
 		case '"':
 			return *quote;
 
-		default: return 0;
+		default: return inString;
 	}  
 }
 
-#define MLCOMMENT_OPEN 1
-#define MLCOMMENT_CLOSED 2
-#define INMLCOMMENT 3
+#define YES 1
+#define NO 2
 
-int syntax_defineMLComment(struct erow *row, int endOfRow, int inMLComment, int i)
+int syntax_defineMLComment(struct erow *row, int endOfRow, int inMLComment, int *i)
 {
+	if(endOfRow) return inMLComment;	
+
 	int MLComment_open = 1;
 	int MLComment_closed = 1; 
 /*
 *	Both are set to 1 to not confuse with strncmp() status report, 
-*	since strncmp() returns 0 if strings are equal.
+*	since strncmp() returns 0 if strings are equal. (I hate it)
 */
-	if(!inMLComment) MLComment_open = strncmp(EConf.SxConf->MLComment_start, &row->render_text[i], 2);
-	else 			MLComment_closed = strncmp(EConf.SxConf->MLComment_end, &row->render_text[i], 2);
+	if(!inMLComment) MLComment_open = strncmp(EConf.SxConf->MLComment_start, &row->render_text[*i], strlen(EConf.SxConf->MLComment_start));
+	else 			MLComment_closed = strncmp(EConf.SxConf->MLComment_end, &row->render_text[*i], strlen(EConf.SxConf->MLComment_end));
 
-	if(!endOfRow && !MLComment_open) return MLCOMMENT_OPEN;
-	else if(!endOfRow && !MLComment_closed) return MLCOMMENT_CLOSED;
-/*
-*	2 as a closing is picked purely just to distinguish whether the start or the end of MLComment is found.
-*	Cases outside and inside of MLComment are handled by the last return - we just return the current state.
+	if(!endOfRow && !MLComment_open) 
+	{
+		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->MLComment_start) - 1); 
+		*i += strlen(EConf.SxConf->MLComment_start) - 1;
+		return YES;
+	}
+	else if(!endOfRow && !MLComment_closed)
+	{
+		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->MLComment_end));
+		*i += strlen(EConf.SxConf->MLComment_end) - 1;
+		return NO;
+	}
+/*	What I did:
+*	1. If opening or closing is found, I paint it and shift the counter index straight to the insides of the comment.
+*	2. Else I carry on current state unchanged.
 */
 	else return inMLComment;
+}
+
+int syntax_defineSLComment(struct erow *row, int endOfRow, int inSLComment, int *i)
+{
+	if(endOfRow) return inSLComment;
+	
+	int isSLComment = 1;
+/*
+*	inSLComment set to 1 with the same purpose - to not confuse outside state and success of strncmp().  
+*/
+	isSLComment = strncmp(&row->render_text[*i], EConf.SxConf->SLComment, strlen(EConf.SxConf->SLComment));
+
+	if(!isSLComment)
+	{
+		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->SLComment) - 1);
+		*i += strlen(EConf.SxConf->SLComment) - 1;
+		return YES;
+	}
+/*
+*	If entry point is found - paint it, move cursor past it, and carry on the YES state. Else just carry on the current state.
+*/
+	else return inSLComment;
 }
 
 void syntax_updateIndexes(struct erow *row)
@@ -293,24 +328,25 @@ void syntax_updateIndexes(struct erow *row)
 	}
 
 	int endOfRow;
-	int isSLComment, isDigit, isKeyword, isDatatype;
-	static int inString = 0;
-	static int inMLComment = 0;
+	int inSLComment = 0;
+	int isDigit, isKeyword, isDatatype;
+	int inString = row->last_inString;
+	int inMLComment = row->last_inMLComment;
 	
 	for(int i = 0; i < row->render_size; i++)
 	{
 		endOfRow = (i == row->render_size - 1);
-		inString = syntax_defineString(row, endOfRow, inString, i);
-		inMLComment = syntax_defineMLComment(row, endOfRow, inMLComment, i);
+		inString = syntax_defineString(row, endOfRow, inString, &i);
+		inMLComment = syntax_defineMLComment(row, endOfRow, inMLComment, &i);
+		if(endOfRow)
+		{
+			row->last_inString = inString;
+			row->last_inMLComment = inMLComment;
+		}
 		
 		switch(inString)
 		{
 			case 0: break;
-
-			case STR_ESC_QUOTE:
-				memset(&row->highlight[i], HL_STRING, 2);
-				i++;
-				break;
 
 			case '\'':
 			case '"': 
@@ -320,24 +356,24 @@ void syntax_updateIndexes(struct erow *row)
 
 		switch(inMLComment)
 		{
-			case 0: break;
+			case NO: break;
 			
-			case MLCOMMENT_OPEN:
-				memset(&row->highlight[i], HL_COMMENT, strlen(EConf.SxConf->MLComment_start));
-				inMLComment = INMLCOMMENT;
-				i += strlen(EConf.SxConf->MLComment_start) - 1;
-				break;
-
-			case MLCOMMENT_CLOSED:
-				memset(&row->highlight[i], HL_COMMENT, strlen(EConf.SxConf->MLComment_end));
-				inMLComment = 0;
-				i += strlen(EConf.SxConf->MLComment_end) - 1;
-				break;
-
-			case INMLCOMMENT:
+			case YES: 
 				row->highlight[i] = HL_COMMENT;
 				break;
 		}
+
+		switch(inSLComment)
+		{
+			case YES:
+				row->highlight[i] = HL_COMMENT;
+				break;
+
+			case NO:
+				break;
+		}
+
+		
 	}
 }
 
@@ -407,7 +443,17 @@ void CLE_appendRow (int to_process, char* s, size_t len)
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
 	EConf.row[to_process].highlight = NULL;
-
+	if(to_process > 0)
+	{
+		EConf.row[to_process].last_inString = EConf.row[to_process - 1].last_inString;
+		EConf.row[to_process].last_inMLComment = EConf.row[to_process - 1].last_inMLComment;
+	}
+	else
+	{
+		EConf.row[to_process].last_inString = 0;
+		EConf.row[to_process].last_inMLComment = 0;
+	}
+	
 	CLE_updateRow(&EConf.row[to_process]);
 
 	EConf.isModified++;

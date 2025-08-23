@@ -66,8 +66,6 @@ struct erow
 	char *render_text;
 
 	unsigned char* highlight;
-	int last_inString;
-	int last_inMLComment;
 };
 
 enum arrows
@@ -237,16 +235,6 @@ void CLE_appendRow (int to_process, char* s, size_t len)
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
 	EConf.row[to_process].highlight = NULL;
-	if(to_process > 0)
-	{
-		EConf.row[to_process].last_inString = EConf.row[to_process - 1].last_inString;
-		EConf.row[to_process].last_inMLComment = EConf.row[to_process - 1].last_inMLComment;
-	}
-	else
-	{
-		EConf.row[to_process].last_inString = 0;
-		EConf.row[to_process].last_inMLComment = 0;
-	}
 	
 	CLE_updateRow(&EConf.row[to_process]);
 
@@ -678,8 +666,8 @@ void updBufFree(struct ubuf* ubuf)
 
 /* SYNTAX HIGHLIGHTING */
 
-#define HL_NUMBER (1<<0)
-#define HL_STRING (1<<1)
+#define HL_FLAG_DIGIT (1<<0)
+#define HL_FLAG_STRING (1<<1)
 
 struct syntax
 {
@@ -695,7 +683,7 @@ struct syntax
 	char **datatypes;
 	char **keywords;
 
-	int HL_flags;
+	int flags;
 };
 
 char *C_mainExts[] = { "*.c", "*.h", "Makefile", "CMakeLists.txt", NULL };
@@ -732,259 +720,109 @@ struct syntax highlight_database[] =
 		C_mainDatatypes,
 		C_mainKeywords,
 
-		HL_NUMBER | HL_STRING
+		HL_FLAG_DIGIT | HL_FLAG_STRING
 	},
 };
 
 #define HL_ENTRIES (sizeof(highlight_database) / sizeof(highlight_database[0]))
 
-int syntax_defineString(struct erow *row, int endOfRow, int inString, int *i)
+enum states
 {
-	int isEscapedQuote = 0;
-	isEscapedQuote = (!endOfRow && inString && row->render_text[*i] == '\\' && (row->render_text[*i + 1] == '\'' || row->render_text[*i + 1] == '"'));
-	if(isEscapedQuote)
-	{
-		memset(&row->highlight[*i++], HL_STRING, 2);
-		return inString;
-	} 
+	MODE_CHARSTRING = 39,
+	MODE_STRING = 34,
+	MODE_MLCOMMENT = 1,
+	MODE_SLCOMMENT,
+	MODE_DIGIT,
+	MODE_DATATYPE,
+	MODE_KEYWORD,
+	MODE_DEFAULT = 0
+};
 
-	int foundQuote = 0;
-	char *quote = strchr(EConf.SxConf->stringDelimiters, row->render_text[*i]);
-	if(quote) foundQuote = abs(inString - *quote);
-/*
-*	1. if quote is found and inString == 0, we get ASCII value of a found quote. 
-*	2. if inString == *quote, we get 0. 
-*	3. if we find the other quote, we get 5 (" is 34 and ' is 39 so we get the difference). Covered by default case just carrying on the current state.  
-*/
-	switch(foundQuote)
-	{
-		case 0:
-			return 0;
-
-		case '\'':
-		case '"':
-			return *quote;
-
-		default: return inString;
-	}  
-}
-
-#define YES 1
-#define NO 2
-
-int syntax_defineMLComment(struct erow *row, int endOfRow, int inMLComment, int *i)
+int syntax_defineState(char *text, int len, int state, unsigned char *highlight, int *i)
 {
-	if(endOfRow) return inMLComment;	
-
-	int MLComment_open = 1;
-	int MLComment_closed = 1; 
-/*
-*	Both are set to 1 to not confuse with strncmp() status report, 
-*	since strncmp() returns 0 if strings are equal. (I hate it)
-*/
-	if(!inMLComment) MLComment_open = strncmp(EConf.SxConf->MLComment_start, &row->render_text[*i], strlen(EConf.SxConf->MLComment_start));
-	else 			MLComment_closed = strncmp(EConf.SxConf->MLComment_end, &row->render_text[*i], strlen(EConf.SxConf->MLComment_end));
-
-	if(!endOfRow && !MLComment_open) 
-	{
-		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->MLComment_start) - 1); 
-		*i += strlen(EConf.SxConf->MLComment_start) - 1;
-		return YES;
-	}
-	else if(!endOfRow && !MLComment_closed)
-	{
-		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->MLComment_end));
-		*i += strlen(EConf.SxConf->MLComment_end) - 1;
-		return NO;
-	}
-/*	What I did:
-*	1. If opening or closing is found, I paint it and shift the counter index straight to the insides of the comment.
-*	2. Else I carry on current state unchanged.
-*/
-	else return inMLComment;
-}
-
-int syntax_defineSLComment(struct erow *row, int endOfRow, int inSLComment, int *i)
-{
-	if(endOfRow) return inSLComment;
-	
-	int isSLComment = 1;
-/*
-*	inSLComment set to 1 with the same purpose - to not confuse outside state and success of strncmp().  
-*/
-	isSLComment = strncmp(&row->render_text[*i], EConf.SxConf->SLComment, strlen(EConf.SxConf->SLComment));
-
-	if(!isSLComment)
-	{
-		memset(&row->highlight[*i], HL_COMMENT, strlen(EConf.SxConf->SLComment) - 1);
-		*i += strlen(EConf.SxConf->SLComment) - 1;
-		return YES;
-	}
-/*
-*	If entry point is found - paint it, move cursor past it, and carry on the YES state. Else just carry on the current state.
-*/
-	else return inSLComment;
-}
-
-int syntax_defineSeparator(int c)
-{
-	return (isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[]{}:;", c) != NULL);	
-}
-
-int syntax_defineDigit(struct erow *row, int i)
-{
-	int currIsDigit = (row->render_text[i] >= '0' && row->render_text[i] <= '9');
-	int prevIsDigitOrSeparator = (i > 0 && syntax_defineSeparator(row->render_text[i - 1]));
-	int nextIsDigitOrSeparator = (syntax_defineSeparator(row->render_text[i + 1]));
-
-	if(prevIsDigitOrSeparator && currIsDigit && nextIsDigitOrSeparator) return YES;
-	else if(i == 0 && currIsDigit && nextIsDigitOrSeparator) return YES;
-	else return NO;
-}
-
-int syntax_defineKeyword(struct erow *row, int i)
-{
-	char **keywords = EConf.SxConf->keywords;
-
-	for(int j = 0; keywords[j]; j++)
-	{
-		int keyword_len = strlen(keywords[j]);
-		if(!strncmp(&row->render_text[i], keywords[j], strlen(keywords[j])) && syntax_defineSeparator(row->render_text[i + keyword_len]))
-		{
-			int prevIsSeparator = ((i == 0) || (i > 0 && syntax_defineSeparator(row->render_text[i - 1])));
-			if(prevIsSeparator) return keyword_len;
-		}
-	}
-/*	What is done here:
-*	1. If keyword is found, return its length so we know how many characters have to be painted and to move i past the keyword.
-*	2. Else return NO state.
-*/
-	return NO;
-}
-
-int syntax_defineDatatype(struct erow *row, int i)
-{
-	char **datatypes = EConf.SxConf->datatypes;
-
-    for(int j = 0; datatypes[j]; j++)
+	int inCharString, inString, inMLComment, inSLComment, isDigit, isDatatype, isKeyword;
+ 
+	inCharString = (state == MODE_CHARSTRING);
+	if(!inCharString && text[*i] == '\'') return MODE_CHARSTRING;
+    else if(inCharString && text[*i] == '\'')
     {
-        int datatype_len = strlen(datatypes[j]);
-        if(!strncmp(&row->render_text[i], datatypes[j], strlen(datatypes[j])) && syntax_defineSeparator(row->render_text[i + datatype_len]))
-        {
-            int prevIsSeparator = ((i == 0) || (i > 0 && syntax_defineSeparator(row->render_text[i - 1])));
-            if(prevIsSeparator) return datatype_len;
-        }
+        if(*i > 0 && text[*i - 1] == '\\') return MODE_CHARSTRING;
+        else highlight[*i++] = HL_STRING;
+		return MODE_DEFAULT;
     }
-/*  What is done here:
-*   This function is a straight up copy of a keyword one. Just the word "keyword" is changed to "datatype".
-*/
-    return NO;
+    else if(inCharString) return MODE_CHARSTRING;
+
+	inString = (state == MODE_STRING);
+	if(!inString && text[*i] == '"') return MODE_STRING;
+	else if(inString && text[*i] == '"')
+	{
+		if(*i > 0 && text[*i - 1] == '\\') return MODE_STRING;
+		else highlight[*i++] = HL_STRING;
+		return MODE_DEFAULT;
+	}
+	else if(inString) return MODE_STRING;
+
+	inMLComment = (state == MODE_MLCOMMENT);
+	if(!inMLComment && !strncmp(&text[*i], EConf.SxConf->MLComment_start, strlen(EConf.SxConf->MLComment_start)))
+	{
+		for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) highlight[*i++] = HL_COMMENT;
+		return MODE_MLCOMMENT;
+	}
+	else if(inMLComment && !strncmp(&text[*i], EConf.SxConf->MLComment_end, strlen(EConf.SxConf->MLComment_end)))
+	{
+		for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) highlight[*i++] = HL_COMMENT;
+		return MODE_DEFAULT;
+	}
+	else if(inMLComment) return MODE_MLCOMMENT;
+
+	return MODE_DEFAULT;
 }
 
-void syntax_updateIndexes(struct erow *row)
+void syntax_updateIndexes(char *text, int len, unsigned char *highlight)
 {
-	unsigned char *t_highlight = realloc(row->highlight, row->render_size);
-	if(!t_highlight)
-	{
-		if(row->highlight) free(row->highlight);
-		row->highlight = NULL;
-		return;
-	}
-
-	int endOfRow;
-	int inSLComment = 0;
-	int isDigit, isKeyword, isDatatype;
-	int inString = row->last_inString;
-	int inMLComment = row->last_inMLComment;
+	int state = MODE_DEFAULT;
 	
-	for(int i = 0; i < row->render_size; i++)
-	{
-		endOfRow = (i == row->render_size - 1);
-		inString = syntax_defineString(row, endOfRow, inString, &i);
-		inMLComment = syntax_defineMLComment(row, endOfRow, inMLComment, &i);
-		isDigit = syntax_defineDigit(row, i);
-		isKeyword = syntax_defineKeyword(row, i);
-		isDatatype = syntax_defineDatatype(row, i);
+	for(int i = 0; i <= len;)
+	{	
+		int init_i = i;
+		state = syntax_defineState(text, len, state, highlight, &i);
 
-		int anything = (inString || inMLComment || isDigit || isKeyword || isDatatype);
-		if(!anything)
+		switch(state)
 		{
-			row->highlight[i] = HL_DEFAULT;
-			continue;
-		}
-
-		if(endOfRow)
-		{
-			row->last_inString = inString;
-			row->last_inMLComment = inMLComment;
-		}
-		
-		switch(inString)
-		{
-			case 0: break;
-
-			case '\'':
-			case '"': 
-				row->highlight[i] = HL_STRING;
-				break; 
-		}
-
-		switch(inMLComment)
-		{
-			case NO: break;
-			
-			case YES: 
-				row->highlight[i] = HL_COMMENT;
-				break;
-		}
-
-		switch(inSLComment)
-		{
-			case YES:
-				row->highlight[i] = HL_COMMENT;
+			case MODE_CHARSTRING:
 				break;
 
-			case NO:
-				break;
-		}
-
-		switch(isDigit)
-		{
-			case YES:
-				row->highlight[i] = HL_DIGIT;
+			case MODE_STRING:
 				break;
 
-			case NO: break;
-		}
-
-		switch(isKeyword)
-		{
-			case NO: break;
-		
-			default:
-				for(int j = i; j < i + isKeyword; j++) row->highlight[j] = HL_KEYWORD;
-				i += isKeyword - 1;
+			case MODE_MLCOMMENT:
 				break;
-		}
 
-		switch(isDatatype)
-		{
-			case NO: break;
+			case MODE_SLCOMMENT:
+				break;
+
+			case MODE_DIGIT:
+				break;
+
+			case MODE_DATATYPE:
+				break;
+
+			case MODE_KEYWORD:
+				break;
 
 			default:
-				for(int j = i; j < i + isDatatype; j++) row->highlight[j] = HL_DATATYPE;
-				i += isDatatype - 1;
 				break;
 		}
-		
+		if(init_i == i) i++;
 	}
 }
 
-void syntax_applyColor(struct ubuf* ubuf, int color)
+int syntax_applyColor(struct ubuf* ubuf, int color)
 {
 	char buffer[16];
 	int currColor = snprintf(buffer, sizeof(buffer), "\x1b[%dm", color);
 	updBufQueue(ubuf, buffer, currColor);
+	return color;
 }
 
 void syntax_applyRuleset()
@@ -1374,29 +1212,21 @@ void processKey()
 
 void drawTextRows(struct ubuf* ubuf)
 {
-	int y;
-	
-	for(y = 0; y < EConf.screenrows; y++)
+	for(int i = 0; i < EConf.screenrows; i++)
 	{
-		int filerow = y + EConf.y_offset;
+		int filerow = i + EConf.y_offset;
+
 		if(filerow >= EConf.numrows)
 		{
 			updBufQueue(ubuf, "~", 1);
 		}
 		else
 		{
-			int len = EConf.row[filerow].render_size - EConf.x_offset;
-			if(len < 0) len = 0;
-			struct erow *currentRow = &EConf.row[filerow];
-			syntax_updateIndexes(currentRow);
-			for(int i = 0; i < currentRow->render_size; i++)
-			{
-				int currColor = HL_DEFAULT;
-				if(currentRow->highlight[i] != currColor) syntax_applyColor(ubuf, currentRow->highlight[i]);
-				updBufQueue(ubuf, &currentRow->render_text[i], 1);
-			}
+			int len = EConf.row[filerow].render_size - EConf.x_offset; 
+			if(len < 0) len = 0; 
+			struct erow *currentRow = &EConf.row[filerow]; 
+			updBufQueue(ubuf, &currentRow->render_text[EConf.x_offset], len);
 		}
-
 		updBufQueue(ubuf, "\x1b[K", 3);
 		updBufQueue(ubuf, "\r\n", 2);
 	}
@@ -1413,7 +1243,10 @@ void drawStatusBar(struct ubuf* ubuf)
 														EConf.isModified? "[MODIFIED]" : "");
 
 	char right_status[80];
-	int right_status_len = snprintf(right_status, sizeof(right_status), "%s | %d/%d", EConf.SxConf? EConf.SxConf->filetype : "no filetype", EConf.cursory + 1, EConf.numrows);
+	int right_status_len = snprintf(right_status, sizeof(right_status), "%s | %d/%d", 
+									EConf.SxConf? EConf.SxConf->filetype : "no filetype", 
+									EConf.cursory + 1, 
+									EConf.numrows);
 
 	updBufQueue(ubuf, status, status_len);
 	while(status_len < EConf.screencols)

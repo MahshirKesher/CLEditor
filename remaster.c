@@ -65,7 +65,8 @@ struct erow
 	char *text;
 	char *render_text;
 
-	unsigned char* highlight;
+	unsigned char *highlight;
+	int init_state;
 };
 
 enum arrows
@@ -203,11 +204,10 @@ void CLE_updateRow(struct erow* row)
 	for(int i = 0; i < row->size; i++)
 		if(row->text[i] == '\t') tab_count++;
 
-	free(row->render_text);
+	if(row->render_text) free(row->render_text);
 	row->render_text = malloc(row->size + tab_count * (CLE_TAB_SIZE - 1) + 1); 
-	int j;
 	int idx = 0;
-	for(j = 0; j < row->size; j++)
+	for(int j = 0; j < row->size; j++)
 	{
 		if(row->text[j] == '\t')
 		{
@@ -218,6 +218,9 @@ void CLE_updateRow(struct erow* row)
 
     row->render_text[idx] = '\0';
     row->render_size = idx;
+	if(row->highlight) free(row->highlight);
+	row->highlight = malloc(row->render_size);
+	memset(row->highlight, 39, row->render_size);
 }
 
 void CLE_appendRow (int to_process, char* s, size_t len)
@@ -235,6 +238,7 @@ void CLE_appendRow (int to_process, char* s, size_t len)
 	EConf.row[to_process].render_size = 0;
 	EConf.row[to_process].render_text = NULL;
 	EConf.row[to_process].highlight = NULL;
+	EConf.row[to_process].init_state = 0;
 	
 	CLE_updateRow(&EConf.row[to_process]);
 
@@ -251,7 +255,7 @@ void CLE_freeRow(struct erow* row)
 
 void CLE_delRow(int at)
 {
-	if(at < 0 || at >+ EConf.numrows) return;
+	if(at < 0 || at > EConf.numrows) return;
 
 	CLE_freeRow(&EConf.row[at]);
 	memmove(&EConf.row[at], &EConf.row[at + 1], sizeof(struct erow) * (EConf.numrows - at - 1));
@@ -728,93 +732,103 @@ struct syntax highlight_database[] =
 
 enum states
 {
-	MODE_CHARSTRING = 39,
-	MODE_STRING = 34,
-	MODE_MLCOMMENT = 1,
+	MODE_CHARSTRING,
+	MODE_STRING,
+	MODE_MLCOMMENT,
 	MODE_SLCOMMENT,
 	MODE_DIGIT,
 	MODE_DATATYPE,
 	MODE_KEYWORD,
-	MODE_DEFAULT = 0
+	MODE_DEFAULT
 };
 
-int syntax_defineState(char *text, int len, int state, unsigned char *highlight, int *i)
+int syntax_isSeparator(int c)
 {
-	int inCharString, inString, inMLComment, inSLComment, isDigit, isDatatype, isKeyword;
- 
-	inCharString = (state == MODE_CHARSTRING);
-	if(!inCharString && text[*i] == '\'') return MODE_CHARSTRING;
-    else if(inCharString && text[*i] == '\'')
+	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>{}[]:;", c) != NULL;
+}
+/*	1. Operate via state machine to decide which color has to be applied depending on the state. 
+*	2. Never modify the caller's counter inside of inner functions. 
+*	3. Make state definition separate from painting - via returning additional info about states or smth like that.
+*/
+int syntax_defineState(char *text, int state, int i)
+{
+	if(state == MODE_DEFAULT && text[i] == '"') return MODE_STRING;
+	else if(state == MODE_STRING && text[i] == '"')
+	{
+		if(i > 1 && text[i - 1] == '\\') 
+		{
+			if(text[i - 2] == '\\') return MODE_STRING + 10; 
+			else return MODE_STRING;
+		}
+		else return MODE_STRING + 10;
+	}
+	else if(state == MODE_STRING) return MODE_STRING;
+
+	if(state == MODE_DEFAULT && text[i] == '\'') return MODE_CHARSTRING;
+	else if(state == MODE_CHARSTRING && text[i] == '\'')
     {
-        if(*i > 0 && text[*i - 1] == '\\') return MODE_CHARSTRING;
-        else highlight[*i++] = HL_STRING;
-		return MODE_DEFAULT;
+        if(i > 1 && text[i - 1] == '\\')
+		{
+			if(text[i - 2] == '\\') return MODE_CHARSTRING + 10;
+			else return MODE_CHARSTRING;
+		}
+        else return MODE_CHARSTRING + 10;
     }
-    else if(inCharString) return MODE_CHARSTRING;
+    else if(state == MODE_CHARSTRING) return MODE_CHARSTRING;
+/*	What is done here:
+*	Once we're inside of a string, index everything with HL_STRING despite if it's ' or ".
+*	Once quitting quote (and not escaped) is found, return MODE_* + 10 as an exit code to let the caller know.
+*/
+	if(state == MODE_DEFAULT && !strncmp(&text[i], EConf.SxConf->MLComment_start, strlen(EConf.SxConf->MLComment_start))) return MODE_MLCOMMENT;
+	else if(state == MODE_MLCOMMENT && !strncmp(&text[i], EConf.SxConf->MLComment_end, strlen(EConf.SxConf->MLComment_end))) return MODE_MLCOMMENT + 10;
+	else if(state == MODE_MLCOMMENT) return MODE_MLCOMMENT;
 
-	inString = (state == MODE_STRING);
-	if(!inString && text[*i] == '"') return MODE_STRING;
-	else if(inString && text[*i] == '"')
-	{
-		if(*i > 0 && text[*i - 1] == '\\') return MODE_STRING;
-		else highlight[*i++] = HL_STRING;
-		return MODE_DEFAULT;
-	}
-	else if(inString) return MODE_STRING;
-
-	inMLComment = (state == MODE_MLCOMMENT);
-	if(!inMLComment && !strncmp(&text[*i], EConf.SxConf->MLComment_start, strlen(EConf.SxConf->MLComment_start)))
-	{
-		for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) highlight[*i++] = HL_COMMENT;
-		return MODE_MLCOMMENT;
-	}
-	else if(inMLComment && !strncmp(&text[*i], EConf.SxConf->MLComment_end, strlen(EConf.SxConf->MLComment_end)))
-	{
-		for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) highlight[*i++] = HL_COMMENT;
-		return MODE_DEFAULT;
-	}
-	else if(inMLComment) return MODE_MLCOMMENT;
+	if(isdigit(text[i])) return MODE_DIGIT;
 
 	return MODE_DEFAULT;
 }
 
-void syntax_updateIndexes(char *text, int len, unsigned char *highlight)
+int syntax_updateIndexes(char *text, int len, int init_state, unsigned char *highlight)
 {
 	int state = MODE_DEFAULT;
-	
-	for(int i = 0; i <= len;)
-	{	
-		int init_i = i;
-		state = syntax_defineState(text, len, state, highlight, &i);
+
+	for(int i = 0; i < len; i++)
+	{
+		if(i == 0 && (init_state == MODE_STRING || init_state == MODE_MLCOMMENT)) state = init_state;
+		else state = syntax_defineState(text, state, i);
 
 		switch(state)
 		{
 			case MODE_CHARSTRING:
-				break;
-
 			case MODE_STRING:
+				highlight[i] = HL_STRING;
+				break;				
+
+			case MODE_CHARSTRING + 10:
+			case MODE_STRING + 10:
+				highlight[i] = HL_STRING;
+				state = MODE_DEFAULT;
 				break;
 
 			case MODE_MLCOMMENT:
+				highlight[i] = HL_COMMENT;
 				break;
 
-			case MODE_SLCOMMENT:
+			case MODE_MLCOMMENT + 10:
+				for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) 
+					highlight[i++] = HL_COMMENT;
+				state = MODE_DEFAULT;
 				break;
 
 			case MODE_DIGIT:
+				highlight[i] = HL_DIGIT;
 				break;
 
-			case MODE_DATATYPE:
-				break;
-
-			case MODE_KEYWORD:
-				break;
-
-			default:
-				break;
+			default: highlight[i] = HL_DEFAULT;
 		}
-		if(init_i == i) i++;
 	}
+
+	return state;
 }
 
 int syntax_applyColor(struct ubuf* ubuf, int color)
@@ -1224,8 +1238,18 @@ void drawTextRows(struct ubuf* ubuf)
 		{
 			int len = EConf.row[filerow].render_size - EConf.x_offset; 
 			if(len < 0) len = 0; 
-			struct erow *currentRow = &EConf.row[filerow]; 
-			updBufQueue(ubuf, &currentRow->render_text[EConf.x_offset], len);
+			struct erow *row = &EConf.row[filerow];
+			memset(row->highlight, HL_DEFAULT, row->render_size);
+			char *c = &row->render_text[EConf.x_offset];
+			int color = HL_DEFAULT;
+			if(filerow < EConf.numrows - 1) EConf.row[filerow + 1].init_state = syntax_updateIndexes(c, len, row->init_state, row->highlight);
+			else syntax_updateIndexes(c, len, row->init_state, row->highlight);
+			for(int j = EConf.x_offset; j < len; j++)
+			{
+				if(row->highlight[j] != color) color = syntax_applyColor(ubuf, row->highlight[j]);
+				updBufQueue(ubuf, &c[j], 1);
+			}
+			syntax_applyColor(ubuf, HL_DEFAULT);
 		}
 		updBufQueue(ubuf, "\x1b[K", 3);
 		updBufQueue(ubuf, "\r\n", 2);

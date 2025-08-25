@@ -93,10 +93,10 @@ enum charManipulation
 enum highlight_color
 {
 	HL_DIGIT = 31,
-	HL_STRING,
 	HL_DATATYPE,
 	HL_KEYWORD,
 	HL_MATCH,
+	HL_STRING,
 	HL_COMMENT,
 	HL_DEFAULT = 39
 };
@@ -448,6 +448,288 @@ void cle_saveFile()
 	}
 }
 
+/* BUFFER FOR WRITE QUEUE */
+
+struct ubuf
+{
+    char *buffer;
+    int len;
+};
+
+#define UBUF_INIT {NULL, 0}
+
+int queue(struct ubuf* ubuf, const char* s, int len)
+{
+    char* new = realloc(ubuf->buffer, ubuf->len + len);
+
+    if(new == NULL) return 0;
+    memcpy(&new[ubuf->len], s, len);
+    ubuf->buffer = new;
+    ubuf->len += len;
+
+    return len;
+}
+
+void updBufFree(struct ubuf* ubuf)
+{
+    free(ubuf->buffer);
+}
+
+/* SYNTAX HIGHLIGHTING */
+
+#define HL_FLAG_DIGIT (1<<0)
+#define HL_FLAG_STRING (1<<1)
+
+struct syntax
+{
+	char *filetype;
+	char **file_exts;
+
+	char *MLComment_start;
+	char *MLComment_end;
+	char *SLComment;
+
+	char *stringDelimiters;
+
+	char **datatypes;
+	char **keywords;
+
+	int flags;
+};
+
+char *C_mainExts[] = { "*.c", "*.h", "Makefile", "CMakeLists.txt", NULL };
+
+char C_stringDelimiters[] = { '"', '\'', '\0' };
+
+char *C_mainDatatypes[] = 
+{ 
+	"int", "char", "float", "double", "long", "short", "const", "volatile", "restrict", "static",
+	"_Bool", "_Complex", "_Imaginary", "inline", "register", 
+	"signed", "unsigned", "void", "struct", "enum", "union", "typedef", NULL 
+};         
+
+char *C_mainKeywords[] = 
+{ 
+	"if", "else", "for", "do", "while", "break", "#define", "#include",
+	"goto", "sizeof", "extern", "auto", "default",
+	"_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local",
+	"continue", "switch", "case", "return", NULL 
+};
+
+struct syntax highlight_database[] = 
+{
+	{
+		"c",
+		C_mainExts,
+	
+		"/*",
+		"*/",
+		"//",
+
+		C_stringDelimiters,
+	
+		C_mainDatatypes,
+		C_mainKeywords,
+
+		HL_FLAG_DIGIT | HL_FLAG_STRING
+	},
+};
+
+#define HL_ENTRIES (sizeof(highlight_database) / sizeof(highlight_database[0]))
+
+enum states
+{
+	MODE_CHARSTRING,
+	MODE_STRING,
+	MODE_MLCOMMENT,
+	MODE_SLCOMMENT,
+	MODE_DIGIT,
+	MODE_DEFAULT,
+	MODE_DATATYPE = 100,
+	MODE_KEYWORD = 200
+};
+
+int syntax_isSeparator(int c)
+{
+	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>{}[]:;", c) != NULL;
+}
+/*	1. Operate via state machine to decide which color has to be applied depending on the state. 
+*	2. Never modify the caller's counter inside of inner functions. 
+*	3. Make state definition separate from painting - via returning additional info about states or smth like that.
+*/
+int syntax_defineState(char *text, int len, int state, int i)
+{
+	if(state == MODE_DEFAULT && text[i] == '"') return MODE_STRING;
+	else if(state == MODE_STRING && text[i] == '"')
+	{
+		if(i > 1 && text[i - 1] == '\\') 
+		{
+			if(text[i - 2] == '\\') return MODE_STRING + 10; 
+			else return MODE_STRING;
+		}
+		else return MODE_STRING + 10;
+	}
+	else if(state == MODE_STRING) return MODE_STRING;
+
+	if(state == MODE_DEFAULT && text[i] == '\'') return MODE_CHARSTRING;
+	else if(state == MODE_CHARSTRING && text[i] == '\'')
+    {
+        if(i > 1 && text[i - 1] == '\\')
+		{
+			if(text[i - 2] == '\\') return MODE_CHARSTRING + 10;
+			else return MODE_CHARSTRING;
+		}
+        else return MODE_CHARSTRING + 10;
+    }
+    else if(state == MODE_CHARSTRING) return MODE_CHARSTRING;
+/*	What is done here:
+*	Once we're inside of a string, index everything with HL_STRING despite if it's ' or ".
+*	Once quitting quote (and not escaped) is found, return MODE_* + 10 as an exit code to let the caller know.
+*/
+	int MLCommentEnter = !strncmp(&text[i], EConf.SxConf->MLComment_start, strlen(EConf.SxConf->MLComment_start));
+	int MLCommentExit = !strncmp(&text[i - 1], EConf.SxConf->MLComment_end, strlen(EConf.SxConf->MLComment_end));
+	if(state == MODE_DEFAULT && MLCommentEnter) return MODE_MLCOMMENT;
+	else if(state == MODE_MLCOMMENT && i > 0 && MLCommentExit) return MODE_MLCOMMENT + 10;
+	else if(state == MODE_MLCOMMENT) return MODE_MLCOMMENT;
+
+	if(isdigit(text[i]))
+	{
+		int prevIsSeparator = (i == 0 || 
+							  (i > 0 && syntax_isSeparator(text[i - 1])) || 
+							  (i > 0 && (text[i - 1] >= '0' && text[i - 1] <= '9')));
+		int nextIsSeparator = (i == len - 1 || 
+							  (i < len - 1 && syntax_isSeparator(text[i + 1])) || 
+							  (i < len - 1 && (text[i + 1] >= '0' && text[i + 1] <= '9')));
+		if(prevIsSeparator && nextIsSeparator) return MODE_DIGIT;
+		else return MODE_DEFAULT;
+	}
+/*	What's done here:
+*	Just a traditional digit and neighbouring characters check.
+*/
+	char **keywords = EConf.SxConf->keywords;
+	char **datatypes = EConf.SxConf->datatypes;
+
+	for(int j = 0; keywords[j]; j++)
+	{
+		int keyword_len = strlen(keywords[j]);
+		if(!strncmp(&text[i], keywords[j], keyword_len))
+		{
+			int prevIsSeparator = (i == 0 ||
+								  (i > 0 && syntax_isSeparator(text[i - 1])));
+			int nextIsSeparator = (i == len - keyword_len - 1 ||
+								  (i < len - keyword_len - 1 && syntax_isSeparator(text[i + keyword_len])));
+			if(prevIsSeparator && nextIsSeparator) return MODE_KEYWORD + keyword_len;
+		}
+	}
+
+	for(int j = 0; datatypes[j]; j++)
+	{
+		int datatype_len = strlen(datatypes[j]);
+		if(!strncmp(&text[i], datatypes[j], datatype_len))
+        {
+			int prevIsSeparator = (i == 0 ||
+								  (i > 0 && syntax_isSeparator(text[i - 1])));
+			int nextIsSeparator = (i == len - datatype_len - 1 ||
+								  (i < len - datatype_len - 1 && syntax_isSeparator(text[i + datatype_len])));
+			if(prevIsSeparator && nextIsSeparator) return MODE_DATATYPE + datatype_len;
+		}
+	}
+/*	What's done here:
+*	If the keyword or datatype is found, we return MODE_* + length of found word, which we parse in the caller.
+*	This way. without extra effort, we know, how far we have to increment the i.
+*/
+
+	return MODE_DEFAULT;
+}
+
+int syntax_updateIndexes(char *text, int len, int init_state, unsigned char *highlight)
+{
+	int state = MODE_DEFAULT;
+
+	int keyword_len, datatype_len;
+
+	for(int i = 0; i < len; i++)
+	{
+		if(i == 0 && (init_state == MODE_STRING || init_state == MODE_MLCOMMENT)) state = init_state;
+		else state = syntax_defineState(text, len, state, i);
+
+		switch(state)
+		{
+			case MODE_CHARSTRING:
+			case MODE_STRING:
+				highlight[i] = HL_STRING;
+				break;				
+
+			case MODE_CHARSTRING + 10:
+			case MODE_STRING + 10:
+				highlight[i] = HL_STRING;
+				state = MODE_DEFAULT;
+				break;
+
+			case MODE_MLCOMMENT:
+				highlight[i] = HL_COMMENT;
+				break;
+
+			case MODE_MLCOMMENT + 10:
+				highlight[i++] = HL_COMMENT;
+				state = MODE_DEFAULT;
+				break;
+
+			case MODE_DIGIT:
+				highlight[i] = HL_DIGIT;
+				break;
+
+			case MODE_KEYWORD ... MODE_KEYWORD + 16:
+				keyword_len = state - MODE_KEYWORD;
+				for(int j = 0; j < keyword_len; j++) highlight[i++] = HL_KEYWORD;
+				state = MODE_DEFAULT;
+				break;
+
+			case MODE_DATATYPE ... MODE_DATATYPE + 16:
+				datatype_len = state - MODE_DATATYPE;
+				for(int j = 0; j < datatype_len; j++) highlight[i++] = HL_DATATYPE;
+				state = MODE_DEFAULT;
+				break;
+
+			default: highlight[i] = HL_DEFAULT;
+		}
+	}
+
+	return state;
+}
+
+int syntax_applyColor(struct ubuf* ubuf, int color)
+{
+	char buffer[16];
+	int currColor = snprintf(buffer, sizeof(buffer), "\x1b[%dm", color);
+	updBufQueue(ubuf, buffer, currColor);
+	return color;
+}
+
+void syntax_applyRuleset()
+{
+	EConf.SxConf = NULL;
+	if(!EConf.filename) return;
+
+	const char *filename = basename(EConf.filename); //basename returns just a name of the file - no path.
+
+	for(unsigned int i = 0; i < HL_ENTRIES; i++)
+	{
+		struct syntax *t_SxConf = &highlight_database[i];
+		unsigned int j = 0;
+
+		while(t_SxConf->file_exts[j])
+		{
+			if(!fnmatch(t_SxConf->file_exts[j], filename, 0)) //fnmatch works with globs like "*.c", "*.h" etc.
+			{
+				EConf.SxConf = t_SxConf;
+				return;
+			}
+			j++;
+		}
+	}
+}
+
 /* SEARCH */
 
 struct search
@@ -563,7 +845,7 @@ void search_expandArrays(struct search *SConf)
 void search_moveCursor(struct search *SConf, int match_number)
 {
 	EConf.cursory = SConf->match_y[match_number];
-	EConf.y_offset = (EConf.cursory - SConf->cursor_offset > 0)? EConf.cursory - SConf->cursor_offset : 0;
+	EConf.y_offset = (EConf.cursory - SConf->cursor_offset >= 0)? EConf.cursory - SConf->cursor_offset : 0;
 	EConf.cursorx = SConf->match_x[match_number];	
 }
 
@@ -577,6 +859,7 @@ void search_findMatches(struct search* SConf, char* query)
 		{
 			SConf->match_x[SConf->actual_size] = CLE_renderToCursor(row, match - row->render_text);
 			SConf->match_y[SConf->actual_size] = i;
+			memset(&row->highlight[SConf->match_x[SConf->actual_size]], HL_MATCH, strlen(query));
 			SConf->actual_size++;
 		}
 		if(SConf->actual_size >= SConf->current_capacity) search_expandArrays(SConf);
@@ -631,7 +914,6 @@ void search_control(char* query, int c)
 		search_resetContents(SConf);
 		SConf->cursor_offset = EConf.cursory - EConf.y_offset;	
 		search_findMatches(SConf, query);
-		SConf->cursor_offset = EConf.cursory - EConf.y_offset;
 	}
 }
 
@@ -639,228 +921,6 @@ void cle_search()
 {
 	char* query = setPrompt("Search for: %s [ESC to cancel]", search_control);
 	if(query) free(query);
-}
-
-/* BUFFER FOR WRITE QUEUE */
-
-struct ubuf
-{
-    char *buffer;
-    int len;
-};
-
-#define UBUF_INIT {NULL, 0}
-
-int queue(struct ubuf* ubuf, const char* s, int len)
-{
-    char* new = realloc(ubuf->buffer, ubuf->len + len);
-
-    if(new == NULL) return 0;
-    memcpy(&new[ubuf->len], s, len);
-    ubuf->buffer = new;
-    ubuf->len += len;
-
-    return len;
-}
-
-void updBufFree(struct ubuf* ubuf)
-{
-    free(ubuf->buffer);
-}
-
-/* SYNTAX HIGHLIGHTING */
-
-#define HL_FLAG_DIGIT (1<<0)
-#define HL_FLAG_STRING (1<<1)
-
-struct syntax
-{
-	char *filetype;
-	char **file_exts;
-
-	char *MLComment_start;
-	char *MLComment_end;
-	char *SLComment;
-
-	char *stringDelimiters;
-
-	char **datatypes;
-	char **keywords;
-
-	int flags;
-};
-
-char *C_mainExts[] = { "*.c", "*.h", "Makefile", "CMakeLists.txt", NULL };
-
-char C_stringDelimiters[] = { '"', '\'', '\0' };
-
-char *C_mainDatatypes[] = 
-{ 
-	"int", "char", "float", "double", "long", "short", "const", "volatile", "restrict", "static",
-	"_Bool", "_Complex", "_Imaginary", "inline", "register", 
-	"signed", "unsigned", "void", "struct", "enum", "union", "typedef", NULL 
-};         
-
-char *C_mainKeywords[] = 
-{ 
-	"if", "else", "for", "do", "while", "break", "#define", "#include",
-	"goto", "sizeof", "extern", "auto", "default",
-	"_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local",
-	"continue", "switch", "case", "return", NULL 
-};
-
-struct syntax highlight_database[] = 
-{
-	{
-		"c",
-		C_mainExts,
-	
-		"/*",
-		"*/",
-		"//",
-
-		C_stringDelimiters,
-	
-		C_mainDatatypes,
-		C_mainKeywords,
-
-		HL_FLAG_DIGIT | HL_FLAG_STRING
-	},
-};
-
-#define HL_ENTRIES (sizeof(highlight_database) / sizeof(highlight_database[0]))
-
-enum states
-{
-	MODE_CHARSTRING,
-	MODE_STRING,
-	MODE_MLCOMMENT,
-	MODE_SLCOMMENT,
-	MODE_DIGIT,
-	MODE_DATATYPE,
-	MODE_KEYWORD,
-	MODE_DEFAULT
-};
-
-int syntax_isSeparator(int c)
-{
-	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>{}[]:;", c) != NULL;
-}
-/*	1. Operate via state machine to decide which color has to be applied depending on the state. 
-*	2. Never modify the caller's counter inside of inner functions. 
-*	3. Make state definition separate from painting - via returning additional info about states or smth like that.
-*/
-int syntax_defineState(char *text, int state, int i)
-{
-	if(state == MODE_DEFAULT && text[i] == '"') return MODE_STRING;
-	else if(state == MODE_STRING && text[i] == '"')
-	{
-		if(i > 1 && text[i - 1] == '\\') 
-		{
-			if(text[i - 2] == '\\') return MODE_STRING + 10; 
-			else return MODE_STRING;
-		}
-		else return MODE_STRING + 10;
-	}
-	else if(state == MODE_STRING) return MODE_STRING;
-
-	if(state == MODE_DEFAULT && text[i] == '\'') return MODE_CHARSTRING;
-	else if(state == MODE_CHARSTRING && text[i] == '\'')
-    {
-        if(i > 1 && text[i - 1] == '\\')
-		{
-			if(text[i - 2] == '\\') return MODE_CHARSTRING + 10;
-			else return MODE_CHARSTRING;
-		}
-        else return MODE_CHARSTRING + 10;
-    }
-    else if(state == MODE_CHARSTRING) return MODE_CHARSTRING;
-/*	What is done here:
-*	Once we're inside of a string, index everything with HL_STRING despite if it's ' or ".
-*	Once quitting quote (and not escaped) is found, return MODE_* + 10 as an exit code to let the caller know.
-*/
-	if(state == MODE_DEFAULT && !strncmp(&text[i], EConf.SxConf->MLComment_start, strlen(EConf.SxConf->MLComment_start))) return MODE_MLCOMMENT;
-	else if(state == MODE_MLCOMMENT && !strncmp(&text[i], EConf.SxConf->MLComment_end, strlen(EConf.SxConf->MLComment_end))) return MODE_MLCOMMENT + 10;
-	else if(state == MODE_MLCOMMENT) return MODE_MLCOMMENT;
-
-	if(isdigit(text[i])) return MODE_DIGIT;
-
-	return MODE_DEFAULT;
-}
-
-int syntax_updateIndexes(char *text, int len, int init_state, unsigned char *highlight)
-{
-	int state = MODE_DEFAULT;
-
-	for(int i = 0; i < len; i++)
-	{
-		if(i == 0 && (init_state == MODE_STRING || init_state == MODE_MLCOMMENT)) state = init_state;
-		else state = syntax_defineState(text, state, i);
-
-		switch(state)
-		{
-			case MODE_CHARSTRING:
-			case MODE_STRING:
-				highlight[i] = HL_STRING;
-				break;				
-
-			case MODE_CHARSTRING + 10:
-			case MODE_STRING + 10:
-				highlight[i] = HL_STRING;
-				state = MODE_DEFAULT;
-				break;
-
-			case MODE_MLCOMMENT:
-				highlight[i] = HL_COMMENT;
-				break;
-
-			case MODE_MLCOMMENT + 10:
-				for(size_t j = 0; j < strlen(EConf.SxConf->MLComment_end); j++) 
-					highlight[i++] = HL_COMMENT;
-				state = MODE_DEFAULT;
-				break;
-
-			case MODE_DIGIT:
-				highlight[i] = HL_DIGIT;
-				break;
-
-			default: highlight[i] = HL_DEFAULT;
-		}
-	}
-
-	return state;
-}
-
-int syntax_applyColor(struct ubuf* ubuf, int color)
-{
-	char buffer[16];
-	int currColor = snprintf(buffer, sizeof(buffer), "\x1b[%dm", color);
-	updBufQueue(ubuf, buffer, currColor);
-	return color;
-}
-
-void syntax_applyRuleset()
-{
-	EConf.SxConf = NULL;
-	if(!EConf.filename) return;
-
-	const char *filename = basename(EConf.filename); //basename returns just a name of the file - no path.
-
-	for(unsigned int i = 0; i < HL_ENTRIES; i++)
-	{
-		struct syntax *t_SxConf = &highlight_database[i];
-		unsigned int j = 0;
-
-		while(t_SxConf->file_exts[j])
-		{
-			if(!fnmatch(t_SxConf->file_exts[j], filename, 0)) //fnmatch works with globs like "*.c", "*.h" etc.
-			{
-				EConf.SxConf = t_SxConf;
-				return;
-			}
-			j++;
-		}
-	}
 }
 
 /* STATUS REPORTS */

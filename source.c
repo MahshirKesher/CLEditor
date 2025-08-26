@@ -1301,15 +1301,19 @@ void drawTextRows(struct ubuf* ubuf)
 			struct erow *row = &EConf.row[filerow];
 			memset(row->highlight, HL_DEFAULT, row->render_size);
 			char *c = &row->render_text[EConf.x_offset];
-			int color = HL_DEFAULT;
-			if(filerow < EConf.numrows - 1) EConf.row[filerow + 1].init_state = syntax_updateIndexes(c, len, row->init_state, row->highlight);
-			else syntax_updateIndexes(c, len, row->init_state, row->highlight);
-			for(int j = EConf.x_offset; j < len; j++)
+			if(EConf.filename == NULL) updBufQueue(ubuf, c, len);
+			else
 			{
-				if(row->highlight[j] != color) color = syntax_applyColor(ubuf, row->highlight[j]);
-				updBufQueue(ubuf, &c[j], 1);
+				int color = HL_DEFAULT;
+				if(filerow < EConf.numrows - 1) EConf.row[filerow + 1].init_state = syntax_updateIndexes(c, len, row->init_state, row->highlight);
+				else syntax_updateIndexes(c, len, row->init_state, row->highlight);
+				for(int j = EConf.x_offset; j < len; j++)
+				{
+					if(row->highlight[j] != color) color = syntax_applyColor(ubuf, row->highlight[j]);
+					updBufQueue(ubuf, &c[j], 1);
+				}
+				syntax_applyColor(ubuf, HL_DEFAULT);			
 			}
-			syntax_applyColor(ubuf, HL_DEFAULT);
 		}
 		updBufQueue(ubuf, "\x1b[K", 3);
 		updBufQueue(ubuf, "\r\n", 2);

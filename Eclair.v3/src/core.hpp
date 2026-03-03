@@ -1,12 +1,22 @@
 #pragma once
 
-#include 
+#include "terminal.hpp"
 
-class Core
+#include <string>
+
+class EditorCore
 {
     public:
-        void run(std::string filename);
+        EditorCore();
+    
+        void run();
+        
+        Status processInput(unsigned char& input);
 
     private:
         Terminal terminal_;
+        
+        bool running;
 };
+
+#define CTRL_(x) ((x) & 0x1F)

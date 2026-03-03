@@ -497,7 +497,7 @@ struct syntax
 	int flags;
 };
 
-char *C_mainExts[] = { "*.c", "*.h", "Makefile", "CMakeLists.txt", NULL };
+char *C_mainExts[] = { "*.c", "*.cpp", "*.h", "*.java", "Makefile", "CMakeLists.txt", NULL };
 
 char C_stringDelimiters[] = { '"', '\'', '\0' };
 
@@ -638,7 +638,6 @@ int syntax_defineState(char *text, int len, int state, int i)
 *	If the keyword or datatype is found, we return MODE_* + length of found word, which we parse in the caller.
 *	This way. without extra effort, we know, how far we have to increment the i.
 */
-
 	return MODE_DEFAULT;
 }
 
@@ -1244,7 +1243,7 @@ void processKey()
 			break;
 
 		case CTRL_P('s'):
-			cle_saveFile(); // TODO: ESC key delay — caused by escape sequence timeout. Fix when editor is feature-complete.
+			cle_saveFile();
 			break;
 
 		case CTRL_P('f'):

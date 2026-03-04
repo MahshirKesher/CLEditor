@@ -1,6 +1,7 @@
 #include "sharedTypes.hpp"
 #include "terminal.hpp"
 
+#include <cstdint>
 #include <errno.h>
 #include <signal.h>
 #include <string>
@@ -8,7 +9,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-Interrupt Terminal::signalFlag = WinResize;
+uint8_t Terminal::signalFlag = 0;
 
 Terminal::Terminal()
 {
@@ -89,14 +90,19 @@ void Terminal::handleInterrupt(int sig)
     {
         default:
         case SIGWINCH:
-            signalFlag = WinResize;
+            signalFlag |= WinResize;
             break;
     }
 }
 
-Interrupt Terminal::flag()
+bool Terminal::checkFlag(Interrupt flag)
 {
-    return signalFlag;
+    return signalFlag == flag;
+}
+
+void Terminal::clearFlag()
+{
+    signalFlag = StandBy;
 }
 
 WinSize Terminal::getWindowSize()

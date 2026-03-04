@@ -1,8 +1,10 @@
 #pragma once
 
+#define CTRL_(x) ((x) & 0x1F)
+
 enum Movement
 {
-    UP,
+    UP = 65,
     DOWN,
     RIGHT,
     LEFT

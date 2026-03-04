@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sharedTypes.hpp"
+#include <cstdint>
 #include <string_view>
 #include <termios.h>
 
@@ -16,7 +17,8 @@ class Terminal
         Status read(void* storage);
         Status write(std::string_view input);
         
-        Interrupt flag();
+        bool checkFlag(Interrupt flag);
+        void clearFlag();
         
         void setupSignalHandler();
         static void handleInterrupt(int signal);
@@ -25,5 +27,5 @@ class Terminal
         
     private:
         struct termios original_;
-        static Interrupt signalFlag;
+        static uint8_t signalFlag;
 };

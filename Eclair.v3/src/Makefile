@@ -5,7 +5,9 @@ INCLUDES = -I ./src
 SRC = \
 ./main.cpp \
 ./core.cpp \
-./terminal.cpp
+./terminal.cpp \
+./cursor.cpp \
+./input.cpp
 
 TARGET = eclair
 

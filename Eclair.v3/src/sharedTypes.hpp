@@ -13,8 +13,8 @@ enum Status
 
 enum Interrupt
 {
-    StandBy = 100,
-    WinResize = 101
+    StandBy = 128,
+    WinResize = 64
 };
 
 struct WinSize

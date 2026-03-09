@@ -2,6 +2,7 @@
 
 #include "sharedTypes.hpp"
 #include <cstdint>
+#include <signal.h>
 #include <string_view>
 #include <termios.h>
 
@@ -27,5 +28,5 @@ class Terminal
         
     private:
         struct termios original_;
-        static uint8_t signalFlag;
+        volatile static sig_atomic_t signalFlag;
 };

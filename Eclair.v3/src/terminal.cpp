@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-uint8_t Terminal::signalFlag = 0;
+volatile sig_atomic_t Terminal::signalFlag = 0;
 
 Terminal::Terminal()
 {
@@ -77,11 +77,12 @@ Status Terminal::write(const std::string_view input)
 
 void Terminal::setupSignalHandler()
 {
-    struct sigaction sa;
+    struct sigaction sa{};
     sa.sa_handler = Terminal::handleInterrupt;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    sigaction(SIGWINCH, &sa, nullptr);
+    if(sigaction(SIGWINCH, &sa, nullptr) == -1)
+        perror("sigaction");
 }
 
 void Terminal::handleInterrupt(int sig)
@@ -97,7 +98,7 @@ void Terminal::handleInterrupt(int sig)
 
 bool Terminal::checkFlag(Interrupt flag)
 {
-    return signalFlag == flag;
+    return (signalFlag & (flag));
 }
 
 void Terminal::clearFlag()

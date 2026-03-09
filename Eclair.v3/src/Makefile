@@ -1,13 +1,17 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++23
-INCLUDES = -I ./src
+INCLUDES = -I ./
 
 SRC = \
 ./main.cpp \
 ./core.cpp \
 ./terminal.cpp \
 ./cursor.cpp \
-./input.cpp
+./input.cpp \
+./viewport.cpp \
+./render.cpp \
+./text.cpp \
+./file.cpp
 
 TARGET = eclair
 

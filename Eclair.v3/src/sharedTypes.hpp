@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 enum Status
 {
     Success = 1,
@@ -8,13 +10,20 @@ enum Status
     ReadingError = 20,
     NoInput = 21,
     SignalInterrupt = 22,
-    WritingError = 30
+    WritingError = 30,
+    TextBufferOverflow = 40
 };
 
 enum Interrupt
 {
-    StandBy = 128,
-    WinResize = 64
+    StandBy = 255,
+    WinResize = 256
+};
+
+enum SOURCE
+{
+    ORIGINAL = 100,
+    APPENDED
 };
 
 struct WinSize
@@ -22,3 +31,18 @@ struct WinSize
     int rows;
     int cols;
 };
+
+struct Piece
+{
+    int start;
+    int length;
+    SOURCE source;
+};
+
+struct Location
+{
+    int pieceIndex;
+    int inPieceOffset;
+};
+
+

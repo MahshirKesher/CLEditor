@@ -8,7 +8,7 @@ InputHandler::InputHandler(Terminal& terminal)
 : terminal_(terminal)
 {}
 
-int InputHandler::define(unsigned char input)
+int InputHandler::define(int input)
 {
     switch(input)
     {
@@ -16,7 +16,8 @@ int InputHandler::define(unsigned char input)
             return QUIT;
             
         case '\x1b':
-            if(terminal_.read(&input) == Success && input == '[') return defineSequence();
+            if(terminal_.read(&input) == Success && input == '[') 
+                return defineSequence();
             else return input;
             
         default:

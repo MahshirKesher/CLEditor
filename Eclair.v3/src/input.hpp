@@ -9,7 +9,7 @@ class InputHandler
     public:
         InputHandler(Terminal& terminal);
     
-        int define(unsigned char input);
+        int define(int input);
         int defineSequence();
         
     private:

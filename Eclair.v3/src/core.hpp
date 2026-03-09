@@ -3,13 +3,17 @@
 #include "terminal.hpp"
 #include "cursor.hpp"
 #include "input.hpp"
+#include "text.hpp"
+#include "render.hpp"
+#include "viewport.hpp"
+#include "file.hpp"
 
 #include <string>
 
 class EditorCore
 {
     public:
-        EditorCore();
+        EditorCore(std::string filename);
     
         void run();
         
@@ -19,7 +23,11 @@ class EditorCore
     private:
         Terminal terminal_;
         InputHandler input_;
+        Viewport view_;
         Cursor cursor_;
+        FileHandler file_;
+        TextBuffer text_;
+        Renderer render_;
         
         bool running;
 };

@@ -8,7 +8,7 @@ int main(int argc, char* argv[])
     if(argc >= 2) filename = argv[1];
     else filename = "";
 
-    EditorCore editor;
+    EditorCore editor(filename);
     editor.run();
     
     return 0;

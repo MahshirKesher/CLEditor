@@ -10,7 +10,10 @@ class TextBuffer
         TextBuffer(std::string);
         
         size_t pieceCount() const;
-        Piece piece(int index) const;
+        Piece piece(size_t index) const;
+        
+        const std::string original() const;
+        const std::string appended() const;
         
         const std::string& giveBuffer(Piece& piece) const;
         

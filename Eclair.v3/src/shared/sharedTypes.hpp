@@ -43,6 +43,12 @@ struct Location
 {
     int pieceIndex;
     int inPieceOffset;
+    
+    bool sameAs(const Location& otherLoc)
+    {
+        return (pieceIndex == otherLoc.pieceIndex) 
+              && (inPieceOffset == otherLoc.inPieceOffset);
+    }
 };
 
 

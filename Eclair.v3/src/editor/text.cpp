@@ -13,4 +13,10 @@ const std::string& TextBuffer::giveBuffer(Piece& piece) const
 }
 
 size_t TextBuffer::pieceCount() const { return pieces.size(); }
-Piece TextBuffer::piece(int index) const { return pieces.at(index); }
+Piece TextBuffer::piece(size_t index) const 
+{ 
+    if(index < pieces.size()) return pieces.at(index);
+    else return {0, 0, APPENDED};
+}
+const std::string TextBuffer::original() const { return original_; }
+const std::string TextBuffer::appended() const { return appended_; }

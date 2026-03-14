@@ -1,4 +1,4 @@
-#include "core.hpp"
+#include "editor/core.hpp"
 #include <string>
 
 int main(int argc, char* argv[])

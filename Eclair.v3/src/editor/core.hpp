@@ -19,6 +19,12 @@ class EditorCore
         
         Status processInput(int input);
         Status handleMovement(Movement input);
+        
+        Location findNextStart();
+        
+        bool enoughSpace(Location currentStart, int steps);
+        Location stepBack(Location currentStart, int steps);
+        Location findPreviousStart();
 
     private:
         Terminal terminal_;
@@ -28,6 +34,8 @@ class EditorCore
         FileHandler file_;
         TextBuffer text_;
         Renderer render_;
+        
+        Location logicCursorOffset;
         
         bool running;
 };

@@ -6,19 +6,22 @@
 class Terminal;
 class Viewport;
 class TextBuffer;
+class Cursor;
 
 class Renderer
 {
     public:
-        Renderer(Terminal&, Viewport&, TextBuffer&);
+        Renderer(Terminal&, Viewport&, TextBuffer&, Cursor&);
     
-        void updateScreen(int row, int col);
+        void updateScreen();
         void clearScreen();
         
         void fillFrame();
+        void blank();
         
     private:
         Terminal& terminal_;
         Viewport& view_;
         TextBuffer& text_;
+        Cursor& cursor_;
 };

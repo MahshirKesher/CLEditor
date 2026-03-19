@@ -4,6 +4,7 @@ Cursor::Cursor()
 {
     row_ = 0;
     col_ = 0;
+    preferredColumn_ = 0;
 }
 
 void Cursor::moveTo(int row, int col)
@@ -22,12 +23,11 @@ void Cursor::setCol(int col)
     col_ = col;
 }
 
-int Cursor::row() const
+void Cursor::setPrefCol(int col)
 {
-    return row_;
+    preferredColumn_ = col;
 }
 
-int Cursor::col() const
-{
-    return col_;
-}
+int Cursor::row() const { return row_; }
+int Cursor::col() const { return col_; }
+int Cursor::prefCol() const { return preferredColumn_; }

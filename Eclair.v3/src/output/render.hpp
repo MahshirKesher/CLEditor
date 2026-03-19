@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include "sharedTypes.hpp"
 
 class Terminal;
@@ -19,9 +20,14 @@ class Renderer
         void fillFrame();
         void blank();
         
+        std::string row(size_t index);
+        int rowSize(size_t index);
+        
     private:
         Terminal& terminal_;
         Viewport& view_;
         TextBuffer& text_;
         Cursor& cursor_;
+        
+        std::vector<std::string> displayBuffer_;
 };

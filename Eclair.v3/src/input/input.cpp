@@ -46,6 +46,18 @@ int InputHandler::defineSequence()
             return RIGHT;
         case 'D':
             return LEFT;
+        case '5':
+            return PAGE_UP;
+        case '6':
+            return PAGE_DOWN;
+        case '1':
+        case '7':
+        case 'H':
+            return HOME;
+        case '4':
+        case '8':
+        case 'F':
+            return END;
         default:
             return '\x1b';
     }

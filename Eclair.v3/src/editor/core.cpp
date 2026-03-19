@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 
 #include "core.hpp"
@@ -60,7 +61,7 @@ Location EditorCore::stepBack(Location currentStart, int steps)
 {
     if(!enoughSpace(currentStart, steps)) return currentStart;
 
-    if(currentStart.inPieceOffset >= steps) 
+    if(currentStart.inPieceOffset >= steps)
         return {currentStart.pieceIndex, currentStart.inPieceOffset - steps};
     steps -= (currentStart.inPieceOffset + 1);
     if(currentStart.pieceIndex > 0) currentStart.pieceIndex--;
@@ -105,34 +106,97 @@ Location EditorCore::findPreviousStart()
 }
 
 Status EditorCore::handleMovement(Movement input)
-{
+{ 
+    int row = cursor_.row();
+    int col = cursor_.col();
+    int prefCol = cursor_.prefCol();
+    int rowOffset = view_.rowOffset();
     switch(input)
     {
         case UP:
-            if(cursor_.row() > 0) cursor_.setRow(cursor_.row() - 1);
-            if(cursor_.row() <= view_.rowOffset() + 3)
+            if(row > 0) row--;
+            if(row <= rowOffset + 3)
             {
                 view_.setStart(findPreviousStart());
+                rowOffset--;
                 render_.updateScreen();
-                view_.setRowOffset(view_.rowOffset() - 1);
             }
+            col = std::min(render_.rowSize(row - rowOffset), prefCol);
             break;
         case DOWN:
-            cursor_.setRow(cursor_.row() + 1);
-            if(cursor_.row() >= (view_.rowOffset() + view_.rows()) - 3)
+            if(row < file_.filerows()) row++;
+            if(row >= (rowOffset + view_.rows()) - 3)
             {
                 view_.setStart(findNextStart());
                 render_.updateScreen();
-                view_.setRowOffset(view_.rowOffset() + 1);
+                rowOffset++;
             }
+            col = std::min(render_.rowSize(row - rowOffset), prefCol);
             break;
         case LEFT:
-            if(cursor_.col() > 0) cursor_.setCol(cursor_.col() - 1);
+            if(col > 0) col--;
+            else if(row > 0)
+            {
+                row--;
+                col = render_.rowSize(row - rowOffset);
+            }
+            if(row <= rowOffset + 3)
+            {
+                view_.setStart(findPreviousStart());
+                rowOffset--;
+                render_.updateScreen();
+            }
+            prefCol = col;
             break;
         case RIGHT:
-            if(cursor_.col() < view_.cols()) cursor_.setCol(cursor_.col() + 1);
+            if(col < render_.rowSize(row - rowOffset)) col++;
+            else if(row < file_.filerows())
+            {
+                row++;
+                col = 0;
+            }
+            if(row >= (rowOffset + view_.rows()) - 3)
+            {
+                view_.setStart(findNextStart());
+                render_.updateScreen();
+                rowOffset++;
+            }
+            prefCol = col;
+            break;
+        case PAGE_UP:
+            for(int i = 0; i < view_.rows(); i++)
+            {
+                view_.setStart(findPreviousStart());
+                if(view_.viewStart().sameAs({0, 0})) break;
+            }
+            rowOffset = std::max(0, rowOffset - view_.rows());
+            row = std::max(0, row - view_.rows());
+            render_.updateScreen();
+            col = std::min(render_.rowSize(row - rowOffset), prefCol);
+            break;
+        case PAGE_DOWN:
+            for(int i = 0; i < view_.rows(); i++)
+            {
+                Location initStart = view_.viewStart();
+                view_.setStart(findNextStart());
+                if(view_.viewStart().sameAs(initStart)) break;
+            }
+            rowOffset = std::min(file_.filerows(), view_.rowOffset() + view_.rows() - 2);
+            row = std::min(file_.filerows(), row + view_.rows() - 2);
+            render_.updateScreen();
+            col = std::min(render_.rowSize(row - rowOffset), prefCol);
+            break;
+        case HOME:
+            col = 0;
+            break;
+        case END:
+            col = render_.rowSize(row - rowOffset);
             break;
     }
+    cursor_.setRow(row);
+    cursor_.setCol(col);
+    cursor_.setPrefCol(prefCol);
+    view_.setRowOffset(rowOffset);
     std::string buffer = "\x1b[" 
                        + std::to_string((cursor_.row() - view_.rowOffset()) + 1) 
                        + ";" 
@@ -153,6 +217,10 @@ Status EditorCore::processInput(int input)
         case DOWN:
         case RIGHT:
         case LEFT:
+        case PAGE_UP:
+        case PAGE_DOWN:
+        case HOME:
+        case END:
             return handleMovement(static_cast<Movement>(input));
         default:
             return Success;

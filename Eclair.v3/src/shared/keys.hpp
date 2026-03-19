@@ -7,7 +7,13 @@ enum Movement
     UP = 65,
     DOWN,
     RIGHT,
-    LEFT
+    LEFT,
+    
+    PAGE_UP,
+    PAGE_DOWN,
+    
+    HOME,
+    END
 };
 
 enum Command

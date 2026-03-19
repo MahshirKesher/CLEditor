@@ -57,10 +57,12 @@ void Renderer::fillFrame()
 
     Location start = view_.viewStart();
 
+    displayBuffer_.clear();
+    size_t pieceCount = text_.pieceCount();
     int rowCount = 0;
     int screenRows = view_.rows();
     Piece currentPiece;
-    size_t pieceCount = text_.pieceCount();
+    std::string currentRow;
     std::string frame;
     
     frame += "\x1b[H";
@@ -72,23 +74,23 @@ void Renderer::fillFrame()
         for(int i = start.inPieceOffset; i < currentPiece.length; i++)
         {
             frame += buffer.at(currentPiece.start + i);
+            currentRow += frame.back();
             if(frame.back() == '\n') 
             {
+                displayBuffer_.push_back(currentRow);
+                currentRow.clear();
                 frame += '\r';
                 frame += "\x1b[K";
                 rowCount++;
             }
-            if(rowCount == screenRows - 2) 
-            {
-                frame += "\x1b[" 
-                      + std::to_string(cursor_.row() + 1) 
-                      + ";" 
-                      + std::to_string(cursor_.col() + 1) 
-                      + "H";
-                terminal_.write(frame);
-                return;
-            }
+            if(rowCount == screenRows - 2) break;
         }
+    }
+    while(rowCount < screenRows - 2)
+    {
+        frame += "\x1b[K";
+        frame += "~\n\r";
+        rowCount++;
     }
     frame += "\x1b[" 
             + std::to_string(cursor_.row() + 1) 
@@ -96,4 +98,16 @@ void Renderer::fillFrame()
             + std::to_string(cursor_.col() + 1) 
             + "H";
     terminal_.write(frame);
+}
+
+std::string Renderer::row(size_t index) 
+{ 
+    if(index >= displayBuffer_.size()) return "";
+    return displayBuffer_.at(index);        
+}
+
+int Renderer::rowSize(size_t index)
+{
+    if(index >= displayBuffer_.size()) return 0;
+    else return displayBuffer_.at(index).size() - 1;
 }
